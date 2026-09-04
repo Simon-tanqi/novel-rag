@@ -12,7 +12,12 @@ import time
 import numpy as np
 from typing import List, Dict, Callable, Optional
 
-from utils import split_text_by_sentences, extract_chapter_title
+from utils import (
+    split_text_by_sentences,
+    extract_chapter_title,
+    resolve_embedding_model,
+    load_embedding_model,
+)
 
 
 def build_vector_index(
@@ -70,24 +75,13 @@ def build_vector_index(
                 "chunk_length": len(chunk)
             })
 
-        # 尝试加载嵌入模型
-        embedding_model = None
-        if embedding_model_path and os.path.exists(embedding_model_path):
-            try:
-                from sentence_transformers import SentenceTransformer
-                if progress_callback:
-                    progress_callback(25, 100, "正在加载嵌入模型...", 25)
-                embedding_model = SentenceTransformer(embedding_model_path, local_files_only=True)
-                embedding_model.max_seq_length = 512
-                print(f"✓ 成功加载嵌入模型: {embedding_model_path}")
-            except ImportError:
-                print("⚠ 未安装 sentence_transformers，将使用关键词检索模式")
-            except Exception as e:
-                print(f"⚠ 加载嵌入模型失败: {e}，将使用关键词检索模式")
-        else:
+        # 尝试加载嵌入模型（本地目录 或 HF 模型名，均可自动降级）
+        embedding_model = load_embedding_model(embedding_model_path)
+        if embedding_model is None:
             if embedding_model_path:
-                print(f"⚠ 嵌入模型路径不存在: {embedding_model_path}")
-            print("⚠ 未配置嵌入模型，将使用关键词检索模式")
+                print("⚠ 嵌入模型不可用，将使用关键词检索模式（仅生成 metadata.json）")
+            else:
+                print("⚠ 未配置嵌入模型，将使用关键词检索模式（仅生成 metadata.json）")
 
         # 生成向量
         embeddings = None

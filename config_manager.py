@@ -7,6 +7,8 @@ import os
 from pathlib import Path
 from typing import Any, Optional
 
+from utils import DEFAULT_EMBEDDING_MODEL
+
 
 class ConfigManager:
     """全局配置管理器"""
@@ -30,17 +32,43 @@ class ConfigManager:
         """
         加载配置文件
 
-        Returns:
-            配置字典
+        冷启动友好：
+        - config.json 不存在 → 返回默认配置；
+        - 若检测到环境变量 DEEPSEEK_API_KEY，且当前没有任何模型，
+          自动注入默认的 deepseek-chat 模型（api_key 留空，运行时由
+          get_models() 从环境变量注入，密钥不落盘）。
         """
         if os.path.exists(self.config_file):
             try:
                 with open(self.config_file, 'r', encoding='utf-8') as f:
-                    return json.load(f)
+                    config = json.load(f)
             except (json.JSONDecodeError, IOError) as e:
                 print(f"⚠ 加载配置文件失败: {e}")
-                return self._get_default_config()
-        return self._get_default_config()
+                config = self._get_default_config()
+        else:
+            config = self._get_default_config()
+
+        return self._seed_default_model(config)
+
+    def _seed_default_model(self, config: dict) -> dict:
+        """检测到 DEEPSEEK_API_KEY 且无任何模型时，注入默认 DeepSeek 模型"""
+        env_key = os.environ.get("DEEPSEEK_API_KEY", "").strip()
+        if env_key and not config.get("models"):
+            config["models"] = self._default_models()
+            print("ℹ 检测到 DEEPSEEK_API_KEY，已自动启用默认模型 deepseek-chat")
+        return config
+
+    @staticmethod
+    def _default_models() -> list:
+        """默认 DeepSeek 模型（api_key 留空，由 get_models 运行时注入环境变量）"""
+        return [{
+            "name": "deepseek-chat",
+            "model_id": "deepseek-chat",
+            "api_url": "https://api.deepseek.com",
+            "api_key": "",
+            "is_local": False,
+            "local_path": "",
+        }]
 
     def _get_default_config(self) -> dict:
         """获取默认配置"""
@@ -51,7 +79,8 @@ class ConfigManager:
             "enable_thinking": False,
             "enable_rerank": False,
             "reranker_model_path": "",
-            "embedding_model_path": "",
+            # 嵌入模型：默认用 bge-small-zh-v1.5（自动下载）；可用 EMBEDDING_MODEL 覆盖
+            "embedding_model_path": os.environ.get("EMBEDDING_MODEL", "").strip() or DEFAULT_EMBEDDING_MODEL,
             "vector_folder": "",
             "local_model_path": ""
         }

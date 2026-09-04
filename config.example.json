@@ -14,7 +14,7 @@
   "enable_thinking": false,
   "enable_rerank": false,
   "reranker_model_path": "",
-  "embedding_model_path": "",
+  "embedding_model_path": "BAAI/bge-small-zh-v1.5",
   "vector_folder": "",
   "local_model_path": ""
 }

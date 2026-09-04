@@ -13,6 +13,8 @@ import time
 import numpy as np
 from typing import List, Dict, Optional
 
+from utils import load_embedding_model
+
 
 class RAGRetriever:
     """RAG检索器"""
@@ -66,27 +68,19 @@ class RAGRetriever:
         cls._cache.clear()
 
     def _load_embedding_model(self):
-        """加载嵌入模型"""
+        """加载嵌入模型（本地目录 或 HF 模型名自动下载；失败则回退关键词检索）"""
         if self._embedding_loaded:
             return
 
         self._embedding_loaded = True
 
-        if self.embedding_model_path and os.path.exists(self.embedding_model_path):
-            try:
-                from sentence_transformers import SentenceTransformer
-                self.embedding_model = SentenceTransformer(self.embedding_model_path, local_files_only=True)
-                self.embedding_model.max_seq_length = 512
+        if self.embedding_model_path:
+            self.embedding_model = load_embedding_model(self.embedding_model_path)
+            if self.embedding_model is not None:
                 print(f"✓ 嵌入模型已加载: {self.embedding_model_path}")
-            except ImportError:
-                print("⚠ 未安装 sentence_transformers，向量检索将使用关键词检索")
-                self.embedding_model = None
-            except Exception as e:
-                print(f"⚠ 加载嵌入模型失败: {e}")
-                self.embedding_model = None
+            else:
+                print(f"⚠ 嵌入模型不可用: {self.embedding_model_path}，使用关键词检索")
         else:
-            if self.embedding_model_path:
-                print(f"⚠ 嵌入模型路径不存在: {self.embedding_model_path}")
             print("⚠ 未配置嵌入模型，将使用关键词检索模式")
             self.embedding_model = None
 

@@ -419,12 +419,11 @@ class ProjectWizard(ctk.CTkToplevel):
             self._update_progress(50, "正在切片与向量化...")
             vector_db_path = get_vector_db_path(name)
 
-            # 获取嵌入模型路径
+            # 获取嵌入模型配置：本地模型目录 或 HF 模型名（如 BAAI/bge-small-zh-v1.5）
+            # 无需在此校验存在性——step2 会按需自动下载或降级为关键词检索
             embedding_model_path = ""
             if self.config_manager:
                 embedding_model_path = self.config_manager.get("embedding_model_path", "")
-            if embedding_model_path and not os.path.exists(embedding_model_path):
-                embedding_model_path = ""
 
             def embed_progress(step, total, msg, pct=0):
                 overall = 50 + (pct / 100) * 45  # 50% - 95%

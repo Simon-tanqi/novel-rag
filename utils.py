@@ -65,6 +65,86 @@ def to_absolute_path(rel_path: str) -> str:
         return rel_path
 
 
+# ===================== 嵌入模型 =====================
+
+# 开箱即用的默认嵌入模型（HuggingFace 模型 ID）。
+# 不配置时自动使用该模型做语义检索；首次使用会自动下载并缓存。
+# 中文小说场景推荐 bge-small-zh-v1.5（约 95MB，CPU 可跑）。
+DEFAULT_EMBEDDING_MODEL = "BAAI/bge-small-zh-v1.5"
+
+
+def resolve_embedding_model(spec: Optional[str]):
+    """
+    解析嵌入模型配置：兼容「本地目录」与「HuggingFace 模型 ID」两种写法。
+
+    返回:
+        ('local', path)  本地模型目录（已存在）
+        ('hub', name)    HuggingFace 模型 ID（首次使用自动下载并缓存）
+        None             未配置 / 本地目录不存在 / 明显无效
+
+    设计说明：
+    - 空值 → None（调用方降级为关键词检索，不阻断流程）；
+    - 以盘符、./、.. 开头或包含反斜杠 → 视为本地路径，不存在时返回 None 并提示；
+    - 其余（如 BAAI/bge-small-zh-v1.5）→ 视为 HF 模型 ID，交给
+      sentence-transformers 在线下载缓存。
+    """
+    if not spec:
+        return None
+    spec = str(spec).strip()
+    if not spec:
+        return None
+
+    looks_like_path = (
+        re.match(r'^[A-Za-z]:[\\/]', spec) is not None
+        or spec.startswith(('.', os.sep))
+        or os.sep in spec
+        or os.path.isdir(spec)
+        or os.path.exists(spec)
+    )
+
+    if looks_like_path:
+        if os.path.isdir(spec):
+            return ('local', spec)
+        print(f"⚠ 本地模型目录不存在（将使用关键词检索）: {spec}")
+        return None
+
+    return ('hub', spec)
+
+
+def load_embedding_model(spec: Optional[str]):
+    """
+    根据配置加载 sentence-transformers 嵌入模型（懒加载）。
+
+    Args:
+        spec: 本地模型目录 或 HF 模型 ID（见 resolve_embedding_model）
+
+    Returns:
+        模型实例或 None（未安装 sentence-transformers / 加载失败 / 未配置）
+    """
+    resolved = resolve_embedding_model(spec)
+    if resolved is None:
+        return None
+    kind, target = resolved
+    try:
+        from sentence_transformers import SentenceTransformer
+        if kind == 'local':
+            print(f"✓ 加载本地嵌入模型: {target}")
+            model = SentenceTransformer(target, local_files_only=True)
+        else:
+            print(
+                f"⏳ 首次使用将下载嵌入模型 {target} "
+                f"（之后自动缓存到 ~/.cache/huggingface）"
+            )
+            model = SentenceTransformer(target)
+        model.max_seq_length = 512
+        return model
+    except ImportError:
+        print("⚠ 未安装 sentence_transformers，将使用关键词检索模式")
+    except Exception as e:
+        print(f"⚠ 加载嵌入模型失败: {e}（将使用关键词检索模式）")
+    return None
+
+
 # ===================== 文本处理 =====================
 def split_text_by_sentences(
     text: str,

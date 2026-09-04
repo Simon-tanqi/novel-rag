@@ -20,10 +20,11 @@ OpenAI-compatible LLM backend. No cloud dependency for indexing; all corpora sta
 - 📚 **多项目管理**：创建 / 切换 / 删除多个小说项目，支持导入已有向量库（.npy + .json）
 - 🧹 **可插拔文本清洗**：6 种规则（去除广告水印、页码、拼音残留、修复 GBK 编码错字等），支持自定义脏词
 - 📝 **句子级智能切片**：以句子为单位 + 重叠窗口滑动切分，避免切断语义
-- 🔍 **双通道检索**：优先本地向量语义检索；未配置嵌入模型时自动回退为关键词检索，功能不瘫痪
+- 🔍 **双通道检索**：本地向量语义检索（默认内置 `bge-small-zh-v1.5`，首次自动下载）；未配置嵌入模型时自动回退为关键词检索，功能不瘫痪
 - 💬 **多轮对话**：手动拼接最近上下文 + 轮数上限，防止上下文膨胀与接口超时
 - ⚙️ **Prompt 模板外置**：可编辑系统提示，强制模型「仅依据原文、禁止编造」
 - 🛡️ **密钥安全**：API Key 不写死在仓库 —— 支持环境变量 `DEEPSEEK_API_KEY` 兜底
+- ⌨️ **CLI 一键管线**：`ingest / ask / chat / list / demo`，无 GUI 也能「txt + API Key → 可问答 RAG 项目」
 
 ## 🏗️ 系统架构
 
@@ -47,9 +48,10 @@ flowchart LR
 | 界面 | customtkinter / tkinter |
 | 文本清洗 | 正则 + 中文网文脏数据映射表（GBK 错字、水印广告、拼音残留） |
 | 切片策略 | 句子滑动窗口 + 重叠（`split_text_by_sentences`） |
-| 嵌入模型 | sentence-transformers（本地推理，可选） |
+| 嵌入模型 | sentence-transformers（本地推理，可选；支持 HF 模型名自动下载） |
 | 向量检索 | numpy 余弦相似度（无重依赖、跨平台） |
 | 生成模型 | OpenAI 兼容 API（默认 DeepSeek） |
+| 命令行 | argparse（ingest / ask / chat / list / demo） |
 | 配置 | JSON + 环境变量 |
 | 测试 | pytest |
 | 运行时产物 | 对话日志 Markdown、Numpy 向量库 |
@@ -72,6 +74,7 @@ flowchart LR
 ```
 novel-rag/
 ├── main.py                 # 主程序入口（GUI）
+├── novel_rag.py            # 命令行入口（CLI：ingest / ask / chat / list / demo）
 ├── project_wizard.py       # 新建项目向导
 ├── project_manager.py      # 项目配置与 CRUD
 ├── settings_window.py      # 系统设置窗口
@@ -94,6 +97,29 @@ novel-rag/
 
 ## 🚀 快速开始
 
+> 💡 **5 分钟用你自己的小说跑通（推荐 CLI）** —— 只需要**一本小说的 .txt + 一个 API Key**：
+
+```bash
+# 1. 安装依赖（CPU 环境建议先装 CPU 版 torch，见下文「环境要求」）
+pip install -r requirements.txt
+
+# 2. 提供 API Key（推荐环境变量，密钥不落盘；Windows PowerShell 用 $env:DEEPSEEK_API_KEY=...）
+export DEEPSEEK_API_KEY=sk-xxxxxxxx
+
+# 3. 导入你自己的小说：清洗 → 切片 → 向量化 → 注册项目（一条命令完成）
+python novel_rag.py ingest ./盘龙.txt --name 盘龙
+
+# 4. 提问
+python novel_rag.py ask --name 盘龙 "林雷在第四重神界遇到了什么？"
+
+# 5.（可选）命令行多轮对话，或启动 GUI
+python novel_rag.py chat --name 盘龙
+python main.py
+```
+
+> 环境验证（不联网、无版权风险）：`python novel_rag.py demo` 会生成一段原创小说并自动跑通全流程，
+> 之后可用 `python novel_rag.py ask --name demo "青云剑诀的心法口诀是什么？"` 验证问答链路。
+
 ### 1. 环境要求
 
 - Python 3.8+
@@ -114,28 +140,39 @@ pip install -r requirements.txt
 
 ### 3. 配置
 
+**模型（三选一，都不需要手动编辑代码）：**
+
 ```bash
-# 复制配置模板
+# 方式 A（推荐）：环境变量，密钥不落盘 —— 什么都不用复制，直接可用
+export DEEPSEEK_API_KEY=sk-xxxxxxxx
+
+# 方式 B：复制模板后填写 config.json
 cp config.example.json config.json   # Windows: copy config.example.json config.json
+
+# 方式 C：临时指定（仅本次命令）
+python novel_rag.py ask --name 盘龙 "你的问题" --api-key sk-xxxxxxxx
 ```
 
-然后在配置中填写：
+**嵌入模型（语义检索用，可选）：**
 
-- **模型 API Key**：可直接填在 `config.json`，或设置环境变量 `DEEPSEEK_API_KEY`（推荐，避免密钥落盘）
-- **嵌入模型路径**（可选）：本地 sentence-transformers 模型目录，用于语义检索
-- **重排模型路径**（可选，开发中）：预留 CrossEncoder 接入位
+- 默认 `BAAI/bge-small-zh-v1.5`：无需任何配置，首次向量化时自动从 HuggingFace 下载并缓存（约 95MB，CPU 可跑）
+- 也可在 `config.json` 的 `embedding_model_path` 填**本地模型目录路径**，或设置环境变量 `EMBEDDING_MODEL`
+- 想纯关键词模式（完全离线）：把 `embedding_model_path` 置空即可
+- 重排模型路径（可选，开发中）：预留 CrossEncoder 接入位
 
 ### 4. 启动
 
 ```bash
-python main.py
+python main.py          # 图形界面
+python novel_rag.py list   # 命令行查看已建项目
 ```
 
 ### 5. 使用流程
 
-1. **➕ 新建 RAG 项目**：输入小说名、选择 `.txt` 源文件 → 配置清洗规则与切片参数 → 自动完成「清洗 → 切片 → 向量化」
-2. **📖 选择已有小说 / 📥 导入向量文件**：复用已生成的 `.npy + .json` 向量库，秒级切换项目
-3. **开始对话**：问题将先检索原文片段，再由 LLM 依据片段作答
+- **命令行（推荐脚本化）**：`ingest` 导入新小说 → `ask` / `chat` 问答 → `list` 查看项目
+- **GUI**：1️⃣➕ 新建 RAG 项目：输入小说名、选择 `.txt` 源文件 → 配置清洗规则与切片参数 → 自动完成「清洗 → 切片 → 向量化」
+  2️⃣📖 选择已有小说 / 📥 导入向量文件：复用已生成的 `.npy + .json` 向量库，秒级切换项目
+  3️⃣开始对话：问题将先检索原文片段，再由 LLM 依据片段作答
 
 ## 🖼️ 使用演示
 
@@ -168,9 +205,10 @@ python -m pytest tests/ -v
 - [x] 多项目管理 + 向量库导入
 - [x] 文本清洗、句子级切片、向量化与检索
 - [x] 多轮对话与 Prompt 模板外置
+- [x] CLI 一键管线（novel_rag.py：ingest / ask / chat / list / demo）
 - [ ] 接入 CrossEncoder 重排（配置项已预留）
 - [ ] 切片阶段保留真实章节标题，回答精确到「第 X 章」
-- [ ] 提供 CLI/HTTP 接口，便于脚本化自动评估
+- [ ] HTTP 服务接口，便于远程脚本化评估
 - [ ] 混合检索（BM25 + 向量）
 
 ## 📄 License

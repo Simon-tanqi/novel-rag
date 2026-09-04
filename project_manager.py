@@ -267,7 +267,10 @@ class ProjectManager:
 
         if has_embeddings and has_metadata:
             return "ready"
-        elif os.path.exists(project.get("cleaned_path", "")):
+        # 仅有 metadata.json（无向量）→ 关键词检索模式，项目同样可问答
+        if has_metadata:
+            return "ready"
+        if os.path.exists(project.get("cleaned_path", "")):
             return "cleaned"
         elif os.path.exists(project.get("source_path", "")):
             return "created"
