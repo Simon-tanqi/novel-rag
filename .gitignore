@@ -1,0 +1,31 @@
+# ===== Python =====
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.venv/
+venv/
+
+# ===== 运行时自动生成（含用户隐私，不入库） =====
+# config.json 含真实 API Key，只保留本地，用 config.example.json 做模板
+config.json
+novel_config.json
+crash_log.txt
+
+# ===== 用户数据 / 受版权保护内容 =====
+# data/ 存放小说原文与向量库（版权语料），不入库；可用自建/开源小语料演示
+data/
+chat_logs/
+
+# ===== 测试与构建 =====
+htmlcov/
+.coverage
+dist/
+build/
+
+# ===== IDE / OS =====
+.idea/
+.vscode/
+*.swp
+.DS_Store
+Thumbs.db

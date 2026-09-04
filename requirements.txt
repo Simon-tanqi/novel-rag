@@ -1,0 +1,22 @@
+# 小说RAG系统 - 依赖列表
+# Python >= 3.8
+
+# GUI框架
+customtkinter>=5.2.0
+
+# HTTP请求
+requests>=2.28.0
+
+# 数值计算
+numpy>=1.24.0
+
+# 向量化核心（本地嵌入模型）
+# sentence-transformers 依赖 torch；CPU 环境建议先装 CPU 版 torch 再装本依赖，
+# 详见 README「安装依赖」说明。缺失时系统会自动降级为关键词检索。
+sentence-transformers>=2.2.0
+
+# 文件编码检测（清洗模块；缺失时自动降级为逐编码探测）
+chardet>=5.0.0
+
+# 开发与测试
+pytest>=7.0.0
