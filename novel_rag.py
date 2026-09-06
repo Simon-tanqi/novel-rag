@@ -38,6 +38,7 @@ from api_client import APIClient, APIClientError
 from config_manager import ConfigManager
 from project_manager import ProjectManager
 from rag_retriever import RAGRetriever
+from format_loader import is_supported_format, load_raw_text
 from step1_clean import RULE_FUNCTIONS, clean_file
 from step2_split_embed import build_vector_index_from_file
 from utils import DEFAULT_EMBEDDING_MODEL, load_env_file
@@ -142,6 +143,12 @@ def cmd_ingest(args) -> None:
         print(f"✗ 源文件不存在: {args.file}")
         sys.exit(1)
 
+    # 格式检查：仅支持 txt / epub
+    if not is_supported_format(args.file):
+        ext = os.path.splitext(args.file)[1]
+        print(f"✗ 不支持的文件格式: {ext}（仅支持 .txt / .epub）")
+        sys.exit(1)
+
     name = args.name or os.path.splitext(os.path.basename(args.file))[0]
     pm = ProjectManager()
     if pm.project_name_exists(name):
@@ -170,6 +177,26 @@ def cmd_ingest(args) -> None:
     else:
         print(f"① 复制原文 → {source_target}")
         shutil.copy2(args.file, source_target)
+
+    # 1.5) epub → txt 转换（如果是 epub 格式）
+    file_ext = os.path.splitext(source_target)[1].lower()
+    if file_ext == ".epub":
+        print("① epub → txt 文本提取 ...")
+        try:
+            raw_text = load_raw_text(source_target)
+        except ImportError as e:
+            print(f"✗ {e}")
+            sys.exit(1)
+        except Exception as e:
+            print(f"✗ epub 解析失败: {e}")
+            sys.exit(1)
+        # 提取后的 txt 路径（与源文件同目录同名，换后缀）
+        txt_path = os.path.splitext(source_target)[0] + ".txt"
+        with open(txt_path, "w", encoding="utf-8") as f:
+            f.write(raw_text)
+        # 后续流程使用提取后的 txt 而非 epub
+        source_target = txt_path
+        print(f"   提取完成: {len(raw_text)} 字符 → {txt_path}")
 
     # 2) 清洗
     print("② 文本清洗 ...")
@@ -511,7 +538,7 @@ def build_parser() -> argparse.ArgumentParser:
     sub = parser.add_subparsers(dest="command", required=True)
 
     p_ingest = sub.add_parser("ingest", help="构建 RAG 项目（清洗→切片→向量化）")
-    p_ingest.add_argument("file", help="小说 txt 文件路径")
+    p_ingest.add_argument("file", help="小说文件路径（.txt 或 .epub）")
     p_ingest.add_argument("--name", help="项目名（默认取文件名）")
     p_ingest.add_argument("--chunk-size", type=int, default=500, help="切片最大字符数（默认 500）")
     p_ingest.add_argument("--overlap", type=int, default=50, help="重叠字符数（默认 50）")

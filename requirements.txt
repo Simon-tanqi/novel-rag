@@ -20,3 +20,7 @@ chardet>=5.0.0
 
 # 开发与测试
 pytest>=7.0.0
+
+# epub 格式支持（可选；缺失时 ingest epub 会提示安装）
+# ebooklib>=0.18
+# beautifulsoup4>=4.12.0

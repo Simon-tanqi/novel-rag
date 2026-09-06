@@ -5,19 +5,20 @@
 ![License](https://img.shields.io/badge/License-MIT-green)
 
 > **NovelRAG** 是一个面向中文小说语料的 **RAG（Retrieval-Augmented Generation）端到端应用**：
-> 从 txt 原文出发，自动完成「编码修复 → 文本清洗 → 句子级滑动窗口切片 → 本地嵌入向量化 →
+> 从 txt / epub 原文出发，自动完成「编码修复 → 文本清洗 → 句子级滑动窗口切片 → 本地嵌入向量化 →
 > 语义检索 → Prompt 组装（含多轮上下文）→ LLM 生成」，并内置多项目管理、向量库导入与聊天日志。
 
 **English abstract**: A desktop RAG application for Chinese novels, covering the full offline pipeline —
 encoding repair, rule-based text cleaning, sentence-level sliding-window chunking, local embedding,
 cosine semantic retrieval (with keyword fallback), prompt templating with multi-turn context, and an
-OpenAI-compatible LLM backend. No cloud dependency for indexing; all corpora stay local.
+OpenAI-compatible LLM backend. Supports both .txt and .epub input. No cloud dependency for indexing; all corpora stay local.
 
 ---
 
 ## ✨ 核心特性
 
 - 📚 **多项目管理**：创建 / 切换 / 删除多个小说项目，支持导入已有向量库（.npy + .json）
+- 📖 **多格式支持**：`.txt` 和 `.epub` 一键导入；epub 自动提取章节文本并转为纯文本走清洗管线，支持导入已有向量库（.npy + .json）
 - 🧹 **可插拔文本清洗**：6 种规则（去除广告水印、页码、拼音残留、修复 GBK 编码错字等），支持自定义脏词
 - 📝 **句子级智能切片**：以句子为单位 + 重叠窗口滑动切分，避免切断语义
 - 🔍 **双通道检索**：本地向量语义检索（默认内置 `bge-small-zh-v1.5`，首次自动下载）；未配置嵌入模型时自动回退为关键词检索，功能不瘫痪
@@ -30,7 +31,7 @@ OpenAI-compatible LLM backend. No cloud dependency for indexing; all corpora sta
 
 ```mermaid
 flowchart LR
-    A["小说原文<br/>.txt"] --> B["step1_clean<br/>文本清洗"]
+    A["小说原文<br/>.txt / .epub"] --> B["step1_clean<br/>文本清洗"]
     B --> C["step2_split_embed<br/>切片 + 向量化"]
     C --> D[("本地向量库<br/>embeddings.npy + metadata.json")]
     Q["用户问题"] --> E["RAGRetriever<br/>语义/关键词检索"]
@@ -93,6 +94,7 @@ novel-rag/
 ├── api_client.py           # LLM API 客户端
 ├── chat_logger.py          # 聊天日志
 ├── message_bubble.py       # 聊天气泡组件
+├── format_loader.py       # 多格式加载器（txt 直读 / epub 提取）
 ├── utils.py                # 路径 / 文本工具函数
 ├── tests/                  # 单元测试
 ├── config.example.json     # 配置模板（复制为 config.json 后填写）
@@ -128,8 +130,10 @@ pip install -r requirements.txt
 # 2. 提供 API Key（推荐环境变量，密钥不落盘；Windows PowerShell 用 $env:DEEPSEEK_API_KEY=...）
 export DEEPSEEK_API_KEY=sk-xxxxxxxx
 
-# 3. 导入你自己的小说：清洗 → 切片 → 向量化 → 注册项目（一条命令完成）
+# 3. 导入你自己的小说（.txt 或 .epub）：清洗 → 切片 → 向量化 → 注册项目（一条命令完成）
 python novel_rag.py ingest ./盘龙.txt --name 盘龙
+# epub 同理（自动提取章节文本）：
+# python novel_rag.py ingest ./遮天.epub --name 遮天
 
 # 4. 提问
 python novel_rag.py ask --name 盘龙 "林雷在第四重神界遇到了什么？"
@@ -199,7 +203,7 @@ python novel_rag.py list   # 命令行查看已建项目
 ### 5. 使用流程
 
 - **命令行（推荐脚本化）**：`ingest` 导入新小说 → `ask` / `chat` 问答 → `list` 查看项目
-- **GUI**：1️⃣➕ 新建 RAG 项目：输入小说名、选择 `.txt` 源文件 → 配置清洗规则与切片参数 → 自动完成「清洗 → 切片 → 向量化」
+- **GUI**：1️⃣➕ 新建 RAG 项目：输入小说名、选择 `.txt` / `.epub` 源文件 → 配置清洗规则与切片参数 → 自动完成「清洗 → 切片 → 向量化」
   2️⃣📖 选择已有小说 / 📥 导入向量文件：复用已生成的 `.npy + .json` 向量库，秒级切换项目
   3️⃣开始对话：问题将先检索原文片段，再由 LLM 依据片段作答
 
@@ -223,9 +227,10 @@ python -m pytest tests/ -v
 
 覆盖范围：文本清洗规则（编码纠错 / 去广告 / 去页码）、句子切片边界、关键词检索回退路径、
 嵌入模型解析与配置冷启动、指代消解前缀注入与章节聚合重排、向量归一化检索、
-API 客户端重试与响应解析、demo 自动注册与 cmd_demo 分支、cmd_ingest 同路径跳过。
+API 客户端重试与响应解析、demo 自动注册与 cmd_demo 分支、cmd_ingest 同路径跳过、
+epub 格式加载与 HTML 标签剥离。
 
-69 项测试全过，0.9 秒内完成。
+81 项测试全过，1 秒内完成。
 
 ## 效果评估思路
 
@@ -244,6 +249,7 @@ API 客户端重试与响应解析、demo 自动注册与 cmd_demo 分支、cmd_
 - [x] 文本清洗、句子级切片、向量化与检索
 - [x] 多轮对话与 Prompt 模板外置
 - [x] CLI 一键管线（novel_rag.py：ingest / ask / chat / list / demo）
+- [x] epub 格式支持（format_loader.py，懒加载 ebooklib + BeautifulSoup）
 - [x] 切片阶段保留真实章节标题，回答精确到「第 X 章」
 - [x] 指代消解前缀注入 + 章节聚合重排（novel_context.py，见「关键设计决策」）
 - [x] 内置 demo 向量库（随仓库预置，clone 后首跑自动注册；`--force` 可重建为真实语义向量）
