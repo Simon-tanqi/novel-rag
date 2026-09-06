@@ -105,6 +105,7 @@ class NovelRAGApp(ctk.CTk):
 
             status_map = {
                 "ready": "✅ 就绪",
+                "keyword_only": "⚠ 仅关键词模式(缺向量库)",
                 "created": "⚠ 待处理",
                 "cleaned": "📝 已清洗",
                 "not_ready": "⏳ 未就绪",
@@ -808,12 +809,17 @@ class NovelRAGApp(ctk.CTk):
 
         # 检查项目状态
         status = self.project_manager.get_project_status(self.current_project["id"])
-        if status != "ready":
+        if status in ("created", "cleaned", "not_ready", "error"):
             tkinter.messagebox.showwarning(
                 "提示",
                 f"当前项目尚未就绪（状态: {status}），请先完成项目创建流程！"
             )
             return
+        if status == "keyword_only":
+            # 纯关键词模式可问答，但召回质量差；一次性提示后放行
+            self.status_label.configure(
+                text="⚠ 关键词模式(缺向量库)，召回质量较差，建议重建向量"
+            )
 
         # 检查轮数
         if self.turn_count >= MAX_TURNS:

@@ -311,15 +311,19 @@ class ProjectManager:
 
         if has_embeddings and has_metadata:
             return "ready"
-        # 仅有 metadata.json（无向量）→ 关键词检索模式，项目同样可问答
+        # 仅有 metadata.json（无向量）→ 关键词检索模式，项目可用但召回质量差
         if has_metadata:
-            return "ready"
+            return "keyword_only"
         if os.path.exists(project.get("cleaned_path", "")):
             return "cleaned"
         elif os.path.exists(project.get("source_path", "")):
             return "created"
         else:
             return "error"
+
+    def is_keyword_only(self, project_id: str) -> bool:
+        """检查项目是否处于纯关键词检索模式（metadata 在但 embeddings.npy 缺失）"""
+        return self.get_project_status(project_id) == "keyword_only"
 
     def import_existing_vector(
         self,
