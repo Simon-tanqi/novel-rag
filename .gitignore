@@ -24,6 +24,12 @@ data/*
 !data/demo/
 chat_logs/
 
+# ===== 本地模型文件（下载到 models/ 目录） =====
+# 由 scripts/download_models.py 下载，较大且可重新生成，不入库。
+# 首次 clone 后运行一次即可：python scripts/download_models.py
+models/
+.hf_cache/
+
 # ===== 测试与构建 =====
 htmlcov/
 .coverage

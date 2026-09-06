@@ -134,38 +134,71 @@ def resolve_embedding_model(spec: Optional[str]):
     return ('hub', spec)
 
 
+_GPU_AVAILABLE: Optional[bool] = None
+_GPU_DEVICE: Optional[str] = None
+
+
+def get_compute_device() -> str:
+    """
+    返回最适合的推理设备：GPU（CUDA）> MPS > CPU。
+    结果缓存，全局只查一次。
+    """
+    global _GPU_AVAILABLE, _GPU_DEVICE
+    if _GPU_DEVICE is not None:
+        return _GPU_DEVICE
+
+    try:
+        import torch
+        if torch.cuda.is_available():
+            device = "cuda"
+            _GPU_AVAILABLE = True
+        elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+            device = "mps"
+            _GPU_AVAILABLE = True
+        else:
+            device = "cpu"
+            _GPU_AVAILABLE = False
+    except Exception:
+        device = "cpu"
+        _GPU_AVAILABLE = False
+
+    _GPU_DEVICE = device
+    return device
+
+
 def load_embedding_model(spec: Optional[str]):
     """
-    根据配置加载 sentence-transformers 嵌入模型（懒加载）。
+    根据配置加载 sentence-transformers 嵌入模型（懒加载，自动选择 GPU/CPU）。
 
     Args:
         spec: 本地模型目录 或 HF 模型 ID（见 resolve_embedding_model）
 
     Returns:
-        模型实例或 None（未安装 sentence-transformers / 加载失败 / 未配置）
+        (模型实例, 设备字符串) 或 (None, "cpu")（失败时）
     """
     resolved = resolve_embedding_model(spec)
     if resolved is None:
-        return None
+        return None, "cpu"
     kind, target = resolved
+    device = get_compute_device()
     try:
         from sentence_transformers import SentenceTransformer
         if kind == 'local':
-            print(f"✓ 加载本地嵌入模型: {target}")
-            model = SentenceTransformer(target, local_files_only=True)
+            print(f"✓ 加载本地嵌入模型: {target}  [设备: {device}]")
+            model = SentenceTransformer(target, local_files_only=True, device=device)
         else:
             print(
                 f"⏳ 首次使用将下载嵌入模型 {target} "
                 f"（之后自动缓存到 ~/.cache/huggingface）"
             )
-            model = SentenceTransformer(target)
+            model = SentenceTransformer(target, device=device)
         model.max_seq_length = 512
-        return model
+        return model, device
     except ImportError:
         print("⚠ 未安装 sentence_transformers，将使用关键词检索模式")
     except Exception as e:
         print(f"⚠ 加载嵌入模型失败: {e}（将使用关键词检索模式）")
-    return None
+    return None, "cpu"
 
 
 # ===================== 文本处理 =====================

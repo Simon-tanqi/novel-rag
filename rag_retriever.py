@@ -84,14 +84,15 @@ class RAGRetriever:
         self._embedding_loaded = True
 
         if self.embedding_model_path:
-            self.embedding_model = load_embedding_model(self.embedding_model_path)
+            self.embedding_model, device = load_embedding_model(self.embedding_model_path)
             if self.embedding_model is not None:
-                print(f"✓ 嵌入模型已加载: {self.embedding_model_path}")
+                print(f"✓ 嵌入模型已加载: {self.embedding_model_path}  [设备: {device}]")
             else:
                 print(f"⚠ 嵌入模型不可用: {self.embedding_model_path}，使用关键词检索")
         else:
             print("⚠ 未配置嵌入模型，将使用关键词检索模式")
             self.embedding_model = None
+            device = "cpu"
 
     # ===================== 数据加载 =====================
 

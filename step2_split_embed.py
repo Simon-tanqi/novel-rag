@@ -99,20 +99,23 @@ def build_vector_index(
                 "coref_prefix": chunks_with_prefix[i] if i < len(chunks_with_prefix) else "",
             })
 
-        # 尝试加载嵌入模型（本地目录 或 HF 模型名，均可自动降级）
-        embedding_model = load_embedding_model(embedding_model_path)
+        # 尝试加载嵌入模型（本地目录 或 HF 模型名，自动选 GPU/CPU）
+        embedding_model, device = load_embedding_model(embedding_model_path)
         if embedding_model is None:
             if embedding_model_path:
                 print("⚠ 嵌入模型不可用，将使用关键词检索模式（仅生成 metadata.json）")
             else:
                 print("⚠ 未配置嵌入模型，将使用关键词检索模式（仅生成 metadata.json）")
+        else:
+            print(f"  设备: {device}")
 
         # 生成向量（编码增广文本：带前缀的用前缀+正文，否则原文）
         embeddings = None
         if embedding_model:
             embeddings = []
             total = len(chunks)
-            batch_size = 32
+            # GPU 用更大 batch 充分利用显存，CPU 用保守值避免内存压力
+            batch_size = 256 if device == "cuda" else 32
 
             if progress_callback:
                 progress_callback(30, 100, "正在生成向量...", 30)

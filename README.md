@@ -90,13 +90,16 @@ novel-rag/
 ├── rag_retriever.py        # RAG 检索核心（向量 / 关键词双通道 + 章节聚合重排）
 ├── novel_context.py        # 小说检索增强：指代消解前缀注入 + 章节聚合重排
 ├── step1_clean.py          # 文本清洗模块
-├── step2_split_embed.py    # 切片与向量化模块
+├── step2_split_embed.py    # 切片与向量化模块（自动 GPU/CPU 推理）
 ├── api_client.py           # LLM API 客户端
 ├── chat_logger.py          # 聊天日志
 ├── message_bubble.py       # 聊天气泡组件
-├── format_loader.py       # 多格式加载器（txt 直读 / epub 提取）
-├── utils.py                # 路径 / 文本工具函数
-├── tests/                  # 单元测试
+├── format_loader.py        # 多格式加载器（txt 直读 / epub 提取）
+├── utils.py                # 路径 / 文本工具函数（含 GPU 设备自动检测）
+├── scripts/
+│   ├── rebuild_embeddings.py   # 一键补 embeddings.npy（向量库损坏时用）
+│   └── download_models.py      # 下载模型到本地 models/（首次 clone 后运行一次）
+├── tests/                  # 单元测试（83 项，pytest 全通过）
 ├── config.example.json     # 配置模板（复制为 config.json 后填写）
 ├── requirements.txt
 └── README.md
@@ -150,6 +153,14 @@ python main.py
 
 - Python 3.8+
 - pip
+- **GPU 加速（可选，推荐有 NVIDIA 显卡的用户）**：
+  RTX 3060 及以上显卡安装 CUDA 版 torch 后向量化自动使用 GPU（batch_size 从 32 → 256，速度提升 10~20×）：
+  ```bash
+  # 已有 CPU 版 torch 时先卸载，再装 CUDA 版（RTX 30/40/50 系列用 cu124）
+  pip uninstall torch -y
+  pip install torch --index-url https://download.pytorch.org/whl/cu124
+  ```
+  无 GPU 或未装 CUDA 版 torch 时自动回退 CPU，不影响功能。
 
 ### 2. 安装依赖
 
@@ -188,8 +199,15 @@ python novel_rag.py ask --name 盘龙 "你的问题" --api-key sk-xxxxxxxx
 
 **嵌入模型（语义检索用，可选）：**
 
-- 默认 `BAAI/bge-small-zh-v1.5`：无需任何配置，首次向量化时自动从 HuggingFace 下载并缓存（约 95MB，CPU 可跑）
-- 也可在 `config.json` 的 `embedding_model_path` 填**本地模型目录路径**，或设置环境变量 `EMBEDDING_MODEL`
+- 默认 `BAAI/bge-small-zh-v1.5`：无需任何配置，首次向量化时自动从 HuggingFace 下载并缓存（约 95MB，自动选择 GPU/CPU）
+- 本地模型目录（推荐有 VPN/网速好的用户，clone 后下载一次，**无需每次重新下载**）：
+  ```bash
+  python scripts/download_models.py          # 下载全套模型到 models/（约 680MB）
+  # 或只下载轻量嵌入（推荐，先跑通）：
+  python scripts/download_models.py --embedding-small
+  ```
+  下载后 `config.json` 中 `embedding_model_path` 自动写为 `models/bge-small-zh-v1.5`（本地路径，优先读取）
+- 国内用户建议设环境变量加速：`set HF_ENDPOINT=https://hf-mirror.com`
 - 想纯关键词模式（完全离线）：把 `embedding_model_path` 置空即可
 - 重排模型路径（可选，开发中）：预留 CrossEncoder 接入位
 
