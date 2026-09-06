@@ -46,9 +46,53 @@ from utils import (
 class ProjectManager:
     """小说项目管理器"""
 
+    # 内置 demo 项目参数（与 novel_rag.py demo 命令保持一致）
+    _DEMO_NAME = "demo"
+    _DEMO_SOURCE_FILE = "demo_novel.txt"
+    _DEMO_CHUNK_SIZE = 500
+    _DEMO_OVERLAP = 50
+    # 与 step1_clean.RULE_FUNCTIONS 全量规则一致（预置数据已按此清洗）
+    _DEMO_CLEAN_RULES = ["去除空行", "去除页码", "去除广告", "合并段落", "修复编码", "去除拼音"]
+
     def __init__(self):
         self.config_file = get_root_dir() / "novel_config.json"
         self.config = self._load_config()
+        # 仓库预置 demo 数据存在但未注册（如 clone 后首次运行）→ 自动注册
+        self.ensure_demo_project()
+
+    def ensure_demo_project(self) -> Optional[Dict]:
+        """确保内置 demo 项目已注册（幂等，可安全重复调用）。
+
+        - 已注册 → 直接返回现有记录
+        - data/demo 数据存在但未注册（clone 仓库后首跑）→ 自动注册并置 ready，不重建数据
+        - 数据不存在（全新环境）→ 返回 None，由 novel_rag.py demo 命令完整构建
+        """
+        existing = self.get_project_by_name(self._DEMO_NAME)
+        if existing:
+            # 兜底：配置中无当前项目（如被手工精简）→ 默认选中 demo
+            if not self.config.get("current_project_id"):
+                self.set_current_project(existing["id"])
+            return existing
+
+        demo_root = get_root_dir() / "data" / self._DEMO_NAME
+        source_file = demo_root / "source" / self._DEMO_SOURCE_FILE
+        meta_file = demo_root / "vector_db" / "metadata.json"
+        if not source_file.is_file() or not meta_file.is_file():
+            return None
+
+        print(f"? 检测到预置 demo 数据，自动注册项目「{self._DEMO_NAME}」...")
+        project = self.create_project(
+            name=self._DEMO_NAME,
+            source_path=str(source_file),
+            chunk_size=self._DEMO_CHUNK_SIZE,
+            overlap=self._DEMO_OVERLAP,
+            clean_rules=list(self._DEMO_CLEAN_RULES),
+        )
+        self.update_project(project["id"], {"status": "ready"})
+        # 首次启动无当前项目时，默认选中 demo（GUI/CLI 开箱即用）
+        if not self.config.get("current_project_id"):
+            self.set_current_project(project["id"])
+        return project
 
     def _load_config(self) -> Dict:
         """加载配置文件"""

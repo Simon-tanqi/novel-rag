@@ -7,7 +7,10 @@ import os
 from pathlib import Path
 from typing import Any, Optional
 
-from utils import DEFAULT_EMBEDDING_MODEL
+from utils import DEFAULT_EMBEDDING_MODEL, load_env_file
+
+# GUI/脚本等未显式调用的场景，构造配置前兜底加载一次（幂等）
+load_env_file()
 
 
 class ConfigManager:

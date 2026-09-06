@@ -13,11 +13,21 @@ import numpy as np
 from typing import List, Dict, Callable, Optional
 
 from utils import (
-    split_text_by_sentences,
+    split_text_by_chapters,
     extract_chapter_title,
     resolve_embedding_model,
     load_embedding_model,
 )
+from novel_context import inject_coref_prefix, chapter_aggregate_rerank
+
+
+def _pick_characters(chunk_texts: List[str]) -> List[str]:
+    """主角表选择：优先用户配置（由调用方注入），否则用内置默认表。
+
+    预留：后续可在此接入 build_character_table 从全文自动挖掘。
+    """
+    from novel_context import DEFAULT_CHARACTERS
+    return list(DEFAULT_CHARACTERS)
 
 
 def build_vector_index(
@@ -46,33 +56,47 @@ def build_vector_index(
         # 创建输出目录
         os.makedirs(output_dir, exist_ok=True)
 
-        # 调整参数以适配 split_text_by_sentences
+        # 调整参数以适配切片函数
         # chunk_size 作为 max_chars，overlap 转换为句子数（约1-2句）
         max_chars = chunk_size
         min_chars = max(100, chunk_size // 3)
         overlap_sentences = max(1, overlap // 50) if overlap > 0 else 1
 
-        # 文本切片
+        # 文本切片（按章节边界切分，chunk 携带真实章节标题）
         if progress_callback:
             progress_callback(0, 100, "正在切片...", 0)
 
-        chunks = split_text_by_sentences(text, min_chars, max_chars, overlap_sentences)
+        chunks, chapter_of_chunk = split_text_by_chapters(
+            text, min_chars, max_chars, overlap_sentences
+        )
 
         if not chunks:
             chunks = [text]
+            chapter_of_chunk = ["正文"]
+
+        # ---- 指代消解增强：为疑似指代开头的 chunk 注入主语前缀 ----
+        # 注入后的增广文本仅用于向量化与关键词检索，metadata 存回原始文本，
+        # 保证展示给 LLM/用户的仍是原文；前缀使含「他/她」的片段可被主角名召回。
+        augmented = inject_coref_prefix(chunks, chapter_of_chunk)
+        chunks_with_prefix = [
+            aug if aug != orig else ""  # 仅标记真正注入过的
+            for aug, orig in zip(augmented, chunks)
+        ]
 
         chunk_count = len(chunks)
         if progress_callback:
             progress_callback(20, 100, f"切片完成: {chunk_count} 个片段", 20)
 
-        # 准备元数据
+        # 准备元数据（chapter 为真实章节标题，供检索结果溯源展示）
         metadata = []
         for i, chunk in enumerate(chunks):
             metadata.append({
                 "text": chunk,
-                "chapter": f"第 {i+1} 段",
+                "chapter": chapter_of_chunk[i] if i < len(chapter_of_chunk) else "正文",
                 "chunk_id": i + 1,
-                "chunk_length": len(chunk)
+                "chunk_length": len(chunk),
+                # 指代注入前缀（仅命中指代的 chunk 有值；检索阶段附加到查询文本）
+                "coref_prefix": chunks_with_prefix[i] if i < len(chunks_with_prefix) else "",
             })
 
         # 尝试加载嵌入模型（本地目录 或 HF 模型名，均可自动降级）
@@ -83,7 +107,7 @@ def build_vector_index(
             else:
                 print("⚠ 未配置嵌入模型，将使用关键词检索模式（仅生成 metadata.json）")
 
-        # 生成向量
+        # 生成向量（编码增广文本：带前缀的用前缀+正文，否则原文）
         embeddings = None
         if embedding_model:
             embeddings = []
@@ -94,9 +118,13 @@ def build_vector_index(
                 progress_callback(30, 100, "正在生成向量...", 30)
 
             start_time = time.time()
+            encode_texts = [
+                (prefix + chunk) if prefix else chunk
+                for prefix, chunk in zip(chunks_with_prefix, chunks)
+            ]
             for i in range(0, total, batch_size):
                 batch_end = min(i + batch_size, total)
-                batch_chunks = chunks[i:batch_end]
+                batch_chunks = encode_texts[i:batch_end]
 
                 # 批量编码
                 batch_embeddings = embedding_model.encode(
@@ -127,6 +155,11 @@ def build_vector_index(
         # 保存结果
         if progress_callback:
             progress_callback(95, 100, "保存向量索引...", 95)
+
+        # 打印注入统计（信息性，不影响功能）
+        injected_count = sum(1 for p in chunks_with_prefix if p)
+        if injected_count:
+            print(f"ℹ 指代消解前缀注入: {injected_count}/{len(chunks)} 个片段")
 
         # 保存嵌入向量
         if embeddings is not None:

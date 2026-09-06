@@ -154,44 +154,122 @@ def _remove_page_numbers(text: str) -> str:
     return '\n'.join(cleaned)
 
 
+# ===================== 广告/水印行判定 =====================
+# 强导航信号：整行命中任一 → 高度疑似书源水印行，删除。
+# （站点名 / 网址 / 祈使语 / 更新提示 —— 结构特征，正文几乎不会整行出现）
+SITE_MARKERS = [
+    '看小说到网', '笔趣阁', '顶点小说', '燃文', '看书网', '16977',
+    'www.', 'http://', 'https://', '.com', '.net', 'txt下载', '全本',
+    '本站', '首发', '无弹窗', '手打更新', '最快更新', '更新最快',
+    '最新章节', '阅读最新章节', '本章未完', '阅读网址', '手机版阅读网址',
+    '手机阅读', '加入书签', '推荐阅读', '天才一秒记住', '请收藏',
+    '请牢记', '如果您觉得', '请到', '支持正版', '看书',
+]
+# 泛词：不单独触发删除（正文高频），仅作为行尾括号水印的辅助匹配词
+WATERMARK_HINTS = (
+    '下载', '免费阅读', '全文', '提供', '正版', '手打', '小游戏',
+)
+# 行尾括号水印匹配（先剔除再判定，避免正文误删）
+_TRAILING_BRACKET_RE = re.compile(
+    r'[（(【\[][^）)】\]]{0,60}?(?:未完待续|本章未完|首发|阅读网址|请收藏|'
+    r'推荐阅读|手打|更新最快|最新章节|免费阅读|请牢记|看小说到网).{0,40}?'
+    r'[）)】\]]\s*$'
+)
+
+
+def _line_is_watermark(stripped: str) -> bool:
+    """判断整行是否为广告/水印行（命中即应删除）
+
+    判定前须已剔除行尾括号水印。策略（防误杀）：
+    - 含任一强导航信号（站点/网址/祈使语/更新提示）→ 删除；
+    - 仅含泛词时：不删除 —— 正文里“下载/免费/正版”等词很常见，
+      单凭泛词删整行会误杀正常叙述。
+    """
+    if not stripped or len(stripped) > 80:
+        return False
+    if any(marker in stripped for marker in SITE_MARKERS):
+        return True
+    return False
+
+
 def _remove_ads(text: str, custom_words: Optional[List[str]] = None) -> str:
     """
-    去除广告和水印
+    去除广告和水印（防误杀设计）
+
+    - 每行先剔除行尾括号水印（如“（本章未完，请点击下一页继续阅读）”），
+      剩余正文保留——绝不因正文里出现“免费/下载”等泛词删整行；
+    - 剔除水印尾巴后，若整行仍命中强水印词 / 弱词+语境组合 → 整行删除；
+    - custom_words 视为强水印词：短行命中即删除。
 
     Args:
         text: 输入文本
         custom_words: 自定义关键词列表
     """
-    watermark_keywords = [
-        '看小说到网', '16977', '小游戏', '手打', '免费',
-        '下载', '全文', '最快更新', '提供', '盗版', '正版'
-    ]
-
-    if custom_words:
-        watermark_keywords.extend(custom_words)
+    custom = list(custom_words) if custom_words else []
 
     lines = text.split('\n')
     cleaned = []
     for line in lines:
-        skip = False
-        for kw in watermark_keywords:
-            if kw in line:
-                skip = True
-                break
-        if not skip:
+        stripped = line.strip()
+        if not stripped:
             cleaned.append(line)
+            continue
+        # 1) 剔除行尾括号水印（保留正文）
+        m = _TRAILING_BRACKET_RE.search(stripped)
+        if m:
+            stripped = stripped[:m.start()].rstrip()
+            if not stripped:
+                continue  # 整行只是括号水印，删
+        # 2) 整行水印判定
+        if _line_is_watermark(stripped):
+            continue
+        # 3) 自定义脏词（仅短行命中才删——长句是正文叙述，不整行删）
+        if any(kw in stripped for kw in custom) and len(stripped) <= 40:
+            continue
+        cleaned.append(stripped)
     return '\n'.join(cleaned)
 
 
 def _merge_paragraphs(text: str) -> str:
-    """合并段落（将换行符合并为空格）"""
-    # 将连续换行替换为空格
-    text = re.sub(r'\n+', ' ', text)
-    # 将多个空格合并为一个
-    text = re.sub(r' +', ' ', text)
-    # 在句号后恢复换行
-    text = re.sub(r'(?<=[。！？；]) ', '\n', text)
-    return text
+    """合并段落（将正文内的换行合并为空格，但保留章节标题行结构）
+
+    章标题（第X章 / 序章 / 楔子…）是文档的结构分隔符，若被合并进正文行，
+    后续按章节切片将无法定位章节边界。因此标题行单独保留并作为分段。
+    """
+    lines = text.split('\n')
+    merged = []  # 元素: 正文行 or 章节标题行
+    for line in lines:
+        stripped = line.strip()
+        if not stripped:
+            continue
+        if _looks_like_chapter_title(stripped):
+            # 标题另起一段（保留结构）
+            merged.append(stripped)
+        else:
+            if merged and not _looks_like_chapter_title(merged[-1]):
+                merged[-1] = merged[-1] + stripped
+            else:
+                merged.append(stripped)
+    # 标题与正文之间用换行分隔，正文段落之间用空格（保持可读性）
+    result = []
+    for i, line in enumerate(merged):
+        if i > 0 and _looks_like_chapter_title(line):
+            result.append('')  # 标题前空行
+        result.append(line)
+    return '\n'.join(result).strip('\n')
+
+
+def _looks_like_chapter_title(line: str) -> bool:
+    """判断文本行是否像章节标题（行首匹配，短行无句读）"""
+    stripped = line.strip()
+    if not stripped or len(stripped) > 60:
+        return False
+    if re.search(r'[。！？；…]', stripped):
+        return False
+    return bool(re.match(
+        r'^\s*(?:第[一二三四五六七八九十百千万零〇两\d]+[章节回卷部集篇话]\s*[^\n]{0,60}|序章|楔子|引子|番外|后记|尾声|完本感言)',
+        stripped
+    ))
 
 
 def _fix_encoding(text: str) -> str:

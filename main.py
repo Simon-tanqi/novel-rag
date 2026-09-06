@@ -797,6 +797,15 @@ class NovelRAGApp(ctk.CTk):
             self._show_project_list()
             return
 
+        # 检查模型配置（避免进入后台线程后调用不存在的 .get()）
+        if not self._get_models():
+            tkinter.messagebox.showwarning(
+                "提示",
+                "尚未配置 AI 模型，请先在「系统设置」中填入 API Key。",
+            )
+            self._open_settings()
+            return
+
         # 检查项目状态
         status = self.project_manager.get_project_status(self.current_project["id"])
         if status != "ready":
@@ -855,7 +864,11 @@ class NovelRAGApp(ctk.CTk):
         timeout_thread.start()
 
         try:
-            # 获取选中的模型
+            # 获取选中的模型（防御：未配置时 model_combobox 是占位按钮，无 .get()）
+            if not hasattr(self.model_combobox, "get"):
+                self.after(0, lambda: self.status_label.configure(text="状态: 请先配置AI模型"))
+                self.after(0, lambda: self._add_ai_message("尚未配置AI模型，请点击右下角「系统设置」填入API Key后重试。"))
+                return
             selected_model_name = self.model_combobox.get()
             if not selected_model_name:
                 self.after(0, lambda: self.status_label.configure(text="状态: 请先配置AI模型"))

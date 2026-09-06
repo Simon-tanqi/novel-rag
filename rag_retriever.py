@@ -2,9 +2,17 @@
 rag_retriever.py — RAG检索核心
 支持从项目级向量库（embeddings.npy + metadata.json）加载和检索
 
-检索模式:
-1. 向量检索: 使用嵌入模型编码查询，计算余弦相似度
-2. 关键词检索: 基于关键词匹配（回退模式）
+检索模式（互斥选择，二选一）:
+1. 向量检索: 使用嵌入模型编码查询，与已存向量计算余弦相似度（默认，需本地嵌入模型）
+2. 关键词检索: 基于关键词匹配（未配置嵌入模型 / 模型加载失败时的降级路径）
+
+说明（2026-09 重构）:
+- 移除了旧版多条未使用的文件加载路径（_load_single_file / _load_npy_file /
+  _load_json_file / _load_text_file / _split_into_chunks），统一走
+  「标准项目级向量库」格式（embeddings.npy + metadata.json）；
+- 目录导入场景仍保留：兼容“目录中散落多个 npy/json/txt”的旧数据目录；
+- 修正不一致：旧逻辑“有向量但无嵌入模型”时也走关键词——语义与
+  “有向量”自相矛盾，现统一按  embedding_model 是否可用 决定检索通道。
 """
 import os
 import re
@@ -14,6 +22,7 @@ import numpy as np
 from typing import List, Dict, Optional
 
 from utils import load_embedding_model
+from novel_context import chapter_aggregate_rerank
 
 
 class RAGRetriever:
@@ -84,8 +93,10 @@ class RAGRetriever:
             print("⚠ 未配置嵌入模型，将使用关键词检索模式")
             self.embedding_model = None
 
+    # ===================== 数据加载 =====================
+
     def load_documents(self):
-        """加载文档和向量数据"""
+        """加载文档和向量数据（统一按项目级标准格式加载）"""
         if not self.vector_path or not os.path.exists(self.vector_path):
             print(f"⚠ 向量路径不存在: {self.vector_path}")
             return
@@ -94,33 +105,39 @@ class RAGRetriever:
         self.documents = []
         self.texts = []
 
-        # 确定要加载的文件
+        # 1) 显式指定的文件名（向量库导入场景）
         if self.vector_file and self.metadata_file:
-            # 使用指定的文件名
             embeddings_file = os.path.join(self.vector_path, self.vector_file)
             metadata_file = os.path.join(self.vector_path, self.metadata_file)
-            
             if os.path.isfile(embeddings_file) and os.path.isfile(metadata_file):
                 self._load_project_vector_db(embeddings_file, metadata_file)
             else:
-                print(f"⚠ 指定的文件不存在: {embeddings_file} 或 {metadata_file}")
+                print(f"⚠ 指定的向量文件不存在: {embeddings_file} 或 {metadata_file}，尝试目录扫描")
                 self._load_directory_vector_db()
-        else:
-            # 尝试标准格式
-            embeddings_file = os.path.join(self.vector_path, "embeddings.npy")
-            metadata_file = os.path.join(self.vector_path, "metadata.json")
+            self._align()
+            return
 
-            if os.path.isfile(embeddings_file) and os.path.isfile(metadata_file):
-                # 标准项目级向量库格式
-                self._load_project_vector_db(embeddings_file, metadata_file)
-            elif os.path.isdir(self.vector_path):
-                # 目录格式 - 尝试加载所有文件
-                self._load_directory_vector_db()
-            elif os.path.isfile(self.vector_path):
-                # 单文件格式
-                self._load_single_file(self.vector_path)
+        # 2) 标准项目级向量库格式
+        embeddings_file = os.path.join(self.vector_path, "embeddings.npy")
+        metadata_file = os.path.join(self.vector_path, "metadata.json")
+        if os.path.isfile(embeddings_file) and os.path.isfile(metadata_file):
+            self._load_project_vector_db(embeddings_file, metadata_file)
+            self._align()
+            return
 
-        # 对齐向量和文本数量
+        # 3) 目录/文件兼容加载（旧数据目录或单文件）
+        if os.path.isdir(self.vector_path):
+            self._load_directory_vector_db()
+        elif os.path.isfile(self.vector_path):
+            self._load_single_file(self.vector_path)
+        self._align()
+
+    def _align(self):
+        """对齐向量与文本数量（截断到较小者）并确保向量已 L2 归一化
+
+        检索用 np.dot 当余弦相似度计算，前提是向量已归一化；
+        新入库向量在 step2 已归一化，这里对旧库/导入库做兜底归一化。
+        """
         if self.embeddings is not None and len(self.texts) > 0:
             min_len = min(len(self.texts), len(self.embeddings))
             if min_len < len(self.texts):
@@ -128,21 +145,22 @@ class RAGRetriever:
                 self.documents = self.documents[:min_len]
             if min_len < len(self.embeddings):
                 self.embeddings = self.embeddings[:min_len]
-
+        if isinstance(self.embeddings, np.ndarray) and self.embeddings.ndim == 2:
+            norms = np.linalg.norm(self.embeddings, axis=1, keepdims=True)
+            norms[norms == 0] = 1.0  # 避免零向量除零
+            self.embeddings = self.embeddings / norms
         print(f"✓ 已加载 {len(self.documents)} 个文档片段")
 
     def _load_project_vector_db(self, embeddings_file: str, metadata_file: str):
         """加载项目级标准向量库"""
         try:
-            # 加载向量
             self.embeddings = np.load(embeddings_file)
             if self.embeddings.ndim == 2:
                 print(f"  向量维度: {self.embeddings.shape[0]} x {self.embeddings.shape[1]}")
             else:
                 self.embeddings = None
-                print("  ⚠ 向量文件格式不正确")
+                print("  ⚠ 向量文件格式不正确（非二维数组）")
 
-            # 加载元数据
             with open(metadata_file, 'r', encoding='utf-8') as f:
                 metadata_list = json.load(f)
 
@@ -150,54 +168,100 @@ class RAGRetriever:
                 text = item.get("text", "")
                 chapter = item.get("chapter", "")
                 chunk_id = item.get("chunk_id", 0)
-
                 self.texts.append(text)
                 self.documents.append({
                     "text": text,
                     "file": chapter,
                     "chunk_id": chunk_id,
-                    "chapter": chapter
+                    "chapter": chapter,
                 })
-
             print(f"  元数据: {len(metadata_list)} 条")
-
         except Exception as e:
             print(f"  ✗ 加载项目向量库失败: {e}")
             self.embeddings = None
 
     def _load_directory_vector_db(self):
-        """从目录加载向量库"""
-        npy_files = []
-        txt_files = []
-        json_files = []
+        """目录兼容加载：扫描目录下的 npy / json / txt，尽量两两配对"""
+        try:
+            entries = sorted(os.listdir(self.vector_path))
+        except OSError as e:
+            print(f"  ⚠ 目录扫描失败: {e}")
+            return
 
-        for file in os.listdir(self.vector_path):
-            if file.endswith('.npy'):
-                npy_files.append(file)
-            elif file.endswith('.txt') or file.endswith('.md'):
-                txt_files.append(file)
-            elif file.endswith('.json'):
-                json_files.append(file)
+        npy_files = [f for f in entries if f.endswith('.npy')]
+        txt_files = [f for f in entries if f.endswith(('.txt', '.md'))]
+        json_files = [f for f in entries if f.endswith('.json')]
 
-        # 优先加载标准格式
+        # 优先加载“成对”的 npy + 同名 json（旧版导出格式，如 xxx.npy + xxx.json）
+        loaded_pair = False
         for npy_file in npy_files:
-            file_path = os.path.join(self.vector_path, npy_file)
-            self._load_single_file(file_path)
+            base = os.path.splitext(npy_file)[0]
+            json_candidates = [f for f in json_files
+                               if os.path.splitext(f)[0] == base]
+            json_file = json_candidates[0] if json_candidates else None
+            if json_file:
+                npy_path = os.path.join(self.vector_path, npy_file)
+                json_path = os.path.join(self.vector_path, json_file)
+                self._load_pair(npy_path, json_path)
+                loaded_pair = True
+        if loaded_pair:
+            # 兼容旧项目：vector_db 下可能同时有标准格式残留，交给上层去重
+            return
 
-        # 加载JSON元数据
-        for json_file in json_files:
-            file_path = os.path.join(self.vector_path, json_file)
-            self._load_json_file(file_path)
+        # 标准格式优先（embeddings.npy + metadata.json）
+        std_emb = os.path.join(self.vector_path, "embeddings.npy")
+        std_meta = os.path.join(self.vector_path, "metadata.json")
+        if os.path.isfile(std_emb) and os.path.isfile(std_meta):
+            self._load_project_vector_db(std_emb, std_meta)
+            return
 
-        # 加载纯文本
+        # 逐个加载（旧目录格式：任意 npy / txt / json）
+        for npy_file in npy_files:
+            self._load_single_file(os.path.join(self.vector_path, npy_file))
         for txt_file in txt_files:
-            txt_name = txt_file.replace('.txt', '.npy').replace('.md', '.npy')
-            if txt_name not in npy_files:
-                file_path = os.path.join(self.vector_path, txt_file)
-                self._load_text_file(file_path)
+            if os.path.splitext(txt_file)[0] + '.npy' not in npy_files:
+                self._load_single_file(os.path.join(self.vector_path, txt_file))
+        for json_file in json_files:
+            self._load_single_file(os.path.join(self.vector_path, json_file))
+
+    def _load_pair(self, npy_path: str, json_path: str):
+        """加载成对向量库（npy 向量 + json 元数据）"""
+        try:
+            data = np.load(npy_path)
+            if not (isinstance(data, np.ndarray) and data.ndim == 2
+                    and data.dtype == np.float32):
+                print(f"  ⚠ 跳过非标准向量文件: {npy_path}")
+                return
+            with open(json_path, 'r', encoding='utf-8') as f:
+                meta = json.load(f)
+            if not isinstance(meta, list):
+                meta = []
+            self.embeddings = data
+            for item in meta:
+                if isinstance(item, dict):
+                    text = item.get('text', item.get('content', ''))
+                    chapter = item.get('chapter', item.get('title', ''))
+                    chunk_id = item.get('chunk_id', 0)
+                    self.texts.append(text)
+                    self.documents.append({
+                        'text': text,
+                        'file': chapter,
+                        'chunk_id': chunk_id,
+                        'chapter': chapter or f"片段 {len(self.texts)}",
+                    })
+                elif isinstance(item, str):
+                    self.texts.append(item)
+                    self.documents.append({
+                        'text': item,
+                        'file': os.path.basename(npy_path),
+                        'chunk_id': len(self.texts),
+                        'chapter': f"片段 {len(self.texts)}",
+                    })
+        except Exception as e:
+            print(f"  ⚠ 加载向量库对失败 {npy_path}: {e}")
 
     def _load_single_file(self, file_path: str):
-        """加载单个文件"""
+        """加载单个文件（按扩展名分派）"""
         try:
             if file_path.endswith('.npy'):
                 self._load_npy_file(file_path)
@@ -209,43 +273,41 @@ class RAGRetriever:
             print(f"  ⚠ 加载文件失败 {file_path}: {e}")
 
     def _load_npy_file(self, file_path: str):
-        """加载NPY向量文件"""
+        """加载 NPY 向量文件（纯向量文件无元数据时，仅记录形状）"""
         try:
             data = np.load(file_path, allow_pickle=True)
-
-            if isinstance(data, np.ndarray):
-                if data.ndim == 2 and data.dtype == np.float32:
-                    self.embeddings = data
-                    print(f"  加载向量: {data.shape[0]} 个向量，维度 {data.shape[1]}")
-                else:
-                    # 可能包含文本数据
-                    for i, item in enumerate(data):
-                        if isinstance(item, dict):
-                            text = item.get('text', str(item))
-                            self.texts.append(text)
-                            self.documents.append({
-                                'text': text,
-                                'file': os.path.basename(file_path),
-                                'chunk_id': i + 1,
-                                'chapter': item.get('chapter', f"片段 {i+1}")
-                            })
-                        elif isinstance(item, str):
-                            self.texts.append(item)
-                            self.documents.append({
-                                'text': item,
-                                'file': os.path.basename(file_path),
-                                'chunk_id': i + 1,
-                                'chapter': f"片段 {i+1}"
-                            })
+            if isinstance(data, np.ndarray) and data.ndim == 2 \
+                    and data.dtype == np.float32:
+                self.embeddings = data
+                print(f"  加载向量: {data.shape[0]} 个向量，维度 {data.shape[1]}")
+            elif isinstance(data, np.ndarray):
+                # 可能内嵌文本对象（旧格式）
+                for i, item in enumerate(data):
+                    if isinstance(item, dict):
+                        text = item.get('text', str(item))
+                        self.texts.append(text)
+                        self.documents.append({
+                            'text': text,
+                            'file': os.path.basename(file_path),
+                            'chunk_id': i + 1,
+                            'chapter': item.get('chapter', f"片段 {i+1}"),
+                        })
+                    elif isinstance(item, str):
+                        self.texts.append(item)
+                        self.documents.append({
+                            'text': item,
+                            'file': os.path.basename(file_path),
+                            'chunk_id': i + 1,
+                            'chapter': f"片段 {i+1}",
+                        })
         except Exception as e:
             print(f"  ⚠ 加载NPY文件失败: {e}")
 
     def _load_json_file(self, file_path: str):
-        """加载JSON元数据文件"""
+        """加载 JSON 元数据文件"""
         try:
             with open(file_path, 'r', encoding='utf-8') as f:
                 data = json.load(f)
-
             if isinstance(data, list):
                 for i, item in enumerate(data):
                     if isinstance(item, dict):
@@ -256,7 +318,7 @@ class RAGRetriever:
                             'text': text,
                             'file': os.path.basename(file_path),
                             'chunk_id': i + 1,
-                            'chapter': chapter
+                            'chapter': chapter,
                         })
                     elif isinstance(item, str):
                         self.texts.append(item)
@@ -264,9 +326,8 @@ class RAGRetriever:
                             'text': item,
                             'file': os.path.basename(file_path),
                             'chunk_id': i + 1,
-                            'chapter': f"片段 {i+1}"
+                            'chapter': f"片段 {i+1}",
                         })
-
                 print(f"  加载JSON元数据: {len(data)} 条")
         except Exception as e:
             print(f"  ⚠ 加载JSON文件失败: {e}")
@@ -276,7 +337,6 @@ class RAGRetriever:
         try:
             with open(file_path, 'r', encoding='utf-8') as f:
                 content = f.read()
-
             chunks = self._split_into_chunks(content)
             for i, chunk in enumerate(chunks):
                 if chunk.strip():
@@ -285,16 +345,15 @@ class RAGRetriever:
                         'text': chunk.strip(),
                         'file': os.path.basename(file_path),
                         'chunk_id': i + 1,
-                        'chapter': f"{os.path.basename(file_path)} - {i + 1}"
+                        'chapter': f"{os.path.basename(file_path)} - {i + 1}",
                     })
         except Exception as e:
             print(f"  ⚠ 加载文本文件失败: {e}")
 
     def _split_into_chunks(self, text: str, chunk_size: int = 500) -> List[str]:
-        """将文本分割成块"""
+        """将文本分割成块（仅用于旧格式 txt 目录加载）"""
         chunks = []
         paragraphs = re.split(r'\n\s*\n', text)
-
         current_chunk = ""
         for para in paragraphs:
             if len(current_chunk) + len(para) > chunk_size:
@@ -303,35 +362,11 @@ class RAGRetriever:
                 current_chunk = para
             else:
                 current_chunk += "\n" + para if current_chunk else para
-
         if current_chunk:
             chunks.append(current_chunk)
-
         return chunks
 
-    def _cosine_similarity(self, vec1: np.ndarray, vec2: np.ndarray) -> float:
-        """计算余弦相似度"""
-        dot_product = np.dot(vec1, vec2)
-        norm1 = np.linalg.norm(vec1)
-        norm2 = np.linalg.norm(vec2)
-        if norm1 == 0 or norm2 == 0:
-            return 0.0
-        return float(dot_product / (norm1 * norm2))
-
-    def _batch_cosine_similarity(self, query_vec: np.ndarray, matrix: np.ndarray) -> np.ndarray:
-        """批量计算余弦相似度"""
-        query_norm = np.linalg.norm(query_vec)
-        if query_norm == 0:
-            return np.zeros(matrix.shape[0])
-
-        matrix_norms = np.linalg.norm(matrix, axis=1)
-        dot_products = matrix @ query_vec
-
-        with np.errstate(divide='ignore', invalid='ignore'):
-            similarities = dot_products / (matrix_norms * query_norm)
-
-        similarities[np.isnan(similarities)] = 0.0
-        return similarities
+    # ===================== 检索 =====================
 
     def retrieve(
         self,
@@ -345,7 +380,7 @@ class RAGRetriever:
         Args:
             question: 查询问题
             top_k: 返回的 top K 结果数
-            enable_rerank: 是否启用重排序
+            enable_rerank: 是否启用重排序（预留，未实现）
 
         Returns:
             相关文档列表，每项包含 {text, score, chapter, chunk_id, file}
@@ -356,16 +391,16 @@ class RAGRetriever:
 
         start_time = time.time()
 
-        # 根据可用模式选择检索方法
-        if self.embeddings is not None and len(self.texts) > 0 and self.embedding_model is not None:
+        # 宽松召回（向量 top_k*3 / 关键词 top_k*3）
+        if self.embedding_model is not None:
             results = self._vector_retrieve(question, top_k * 3)
         else:
             results = self._keyword_retrieve(question, top_k * 3)
 
         retrieve_time = time.time() - start_time
 
-        # 截取 top_k 结果
-        final_results = results[:top_k]
+        # 章节聚合重排：同章去重、覆盖多章、按章内最高分排序
+        final_results = chapter_aggregate_rerank(results, top_k)
         print(f"✓ 检索完成: {len(final_results)} 个结果，耗时 {retrieve_time:.3f}秒")
 
         return final_results
@@ -391,7 +426,9 @@ class RAGRetriever:
         results = []
 
         for doc in self.documents:
-            doc_text = doc['text'].lower()
+            # 匹配用增广文本（注入前缀 + 原文）→ 指代片段可被主角名命中
+            prefix = doc.get('coref_prefix', '') or ''
+            doc_text = (prefix + doc['text']).lower()
             score = 0
 
             for word in question_words:
@@ -414,45 +451,38 @@ class RAGRetriever:
         return results[:top_k]
 
     def _vector_retrieve(self, question: str, top_k: int) -> List[Dict]:
-        """向量检索"""
+        """向量检索（需嵌入模型 + 二维向量库）"""
         try:
             if not self.embedding_model:
                 return self._keyword_retrieve(question, top_k)
 
-            # 编码查询
+            if not isinstance(self.embeddings, np.ndarray) \
+                    or self.embeddings.ndim != 2:
+                print("⚠ 向量库不是二维数组，回退到关键词检索")
+                return self._keyword_retrieve(question, top_k)
+
+            # 编码查询（注入侧已含主角名前缀，查询含主角名即可命中）
             query_embedding = self.embedding_model.encode(
                 question,
                 normalize_embeddings=True,
                 convert_to_numpy=True
             )
 
-            # 计算相似度
-            if isinstance(self.embeddings, np.ndarray) and self.embeddings.ndim == 2:
-                sim_scores = np.dot(self.embeddings, query_embedding)
-                top_indices = np.argsort(sim_scores)[::-1][:top_k]
-                similarities = [(float(sim_scores[i]), int(i)) for i in top_indices]
-            else:
-                # 逐条计算
-                similarities = []
-                for i in range(min(len(self.embeddings), len(self.documents))):
-                    doc_embedding = self.embeddings[i] if i < len(self.embeddings) else None
-                    if doc_embedding is not None and isinstance(doc_embedding, np.ndarray):
-                        if len(doc_embedding) == len(query_embedding):
-                            sim = self._cosine_similarity(query_embedding, doc_embedding)
-                            similarities.append((sim, i))
-
-                similarities.sort(key=lambda x: x[0], reverse=True)
+            # 批量余弦相似度：矩阵点积（向量库已归一化时即余弦值）
+            sim_scores = np.dot(self.embeddings, query_embedding)
+            top_indices = np.argsort(sim_scores)[::-1][:top_k]
 
             # 构建结果
             results = []
-            for similarity, idx in similarities[:top_k]:
+            for i in top_indices:
+                similarity = float(sim_scores[i])
                 if similarity > 0.1:  # 最低相似度阈值
-                    doc = self.documents[idx] if idx < len(self.documents) else {"text": "", "chapter": "", "chunk_id": 0, "file": ""}
+                    doc = self.documents[i] if i < len(self.documents) \
+                        else {"text": "", "chapter": "", "chunk_id": 0, "file": ""}
                     results.append({
                         'score': round(similarity, 4),
                         **doc
                     })
-
             return results
 
         except Exception as e:

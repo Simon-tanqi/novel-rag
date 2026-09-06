@@ -68,6 +68,13 @@ flowchart LR
 4. **忠实度优先的 Prompt 工程**：系统提示显式要求「只使用提供的原文片段回答，不编造」；
    模板完全外置可编辑，便于对不同模型做适配实验。
 5. **本地优先与隐私**：全文清洗、切片、向量化均在本地完成；聊天记录按项目落盘为 Markdown，可移植、可审计。
+6. **小说检索专属增强（novel_context.py）**：
+   - *指代消解前缀注入*：切片后若 chunk 以「他/她/它」开头且前文解析出主角名，向量化前
+     注入 `【前文主语：主角名】` 前缀（metadata 仍存原文，仅检索/向量化用），解决
+     「问林雷时搜不到只写他的片段」的漏召回；
+   - *章节聚合重排*：宽松召回后按章节聚合（每章保留最高分）再排序截断，避免 top_k
+     结果集中在一章内、漏掉语义相关的其他章节（多样性）。
+   两者均零额外依赖、纯规则启发式，重排前 `top_k × 3` 召回为聚合留出余量。
 
 ## 📁 目录结构
 
@@ -79,7 +86,8 @@ novel-rag/
 ├── project_manager.py      # 项目配置与 CRUD
 ├── settings_window.py      # 系统设置窗口
 ├── config_manager.py       # 全局配置（含环境变量 API Key 兜底）
-├── rag_retriever.py        # RAG 检索核心（向量 / 关键词双通道）
+├── rag_retriever.py        # RAG 检索核心（向量 / 关键词双通道 + 章节聚合重排）
+├── novel_context.py        # 小说检索增强：指代消解前缀注入 + 章节聚合重排
 ├── step1_clean.py          # 文本清洗模块
 ├── step2_split_embed.py    # 切片与向量化模块
 ├── api_client.py           # LLM API 客户端
@@ -92,10 +100,24 @@ novel-rag/
 └── README.md
 ```
 
-> 运行时自动生成的 `config.json`（含真实 API Key）、`novel_config.json`、`data/`（版权语料与向量库）、
-> `chat_logs/` 均已被 `.gitignore` 排除，**不会进入版本库**。
+> 运行时自动生成的 `config.json`（含真实 API Key）、`novel_config.json`、
+> `data/`（版权语料与向量库）、`chat_logs/` 均已被 `.gitignore` 排除，**不会进入版本库**。
+> **例外**：`data/demo/`（内置原创示例小说的向量库）已通过 `.gitignore` 白名单放行，随仓库发布，
+> 确保 clone 后开箱即用。
 
 ## 🚀 快速开始
+
+> 💡 **0 分钟体验（推荐第一次）** —— 没有小说语料也想看效果：
+>
+```bash
+ # 一条命令生成示例小说 + 完整向量库（首次会下载嵌入模型约 95MB）
+ python novel_rag.py demo
+ # 然后启动 GUI 或命令行提问：
+ python main.py                       # GUI 选「当前项目: demo」开始对话
+ python novel_rag.py ask --name demo "沈青的师父是谁？"  # CLI 单次问答
+```
+>
+ **⚠ 仓库预置 demo 向量库**：`data/demo/` 已随仓库发布（含原创小说原文 + embeddings.npy + metadata.json，无版权风险）。clone 后首次运行任何命令时 `ProjectManager` 自动注册 demo 项目并设为当前项目，**开箱即用**。如需升级为真实语义向量（如换模型后），执行 `python novel_rag.py demo --force` 重建。环境变量 `HF_ENDPOINT=https://hf-mirror.com` 可在国内加速模型下载。
 
 > 💡 **5 分钟用你自己的小说跑通（推荐 CLI）** —— 只需要**一本小说的 .txt + 一个 API Key**：
 
@@ -140,18 +162,25 @@ pip install -r requirements.txt
 
 ### 3. 配置
 
-**模型（三选一，都不需要手动编辑代码）：**
+**模型（四种方式，任选其一，都不需要手动编辑代码）：**
 
 ```bash
-# 方式 A（推荐）：环境变量，密钥不落盘 —— 什么都不用复制，直接可用
-export DEEPSEEK_API_KEY=sk-xxxxxxxx
+# 方式 A（推荐）：复制 .env.example 为 .env 并填入 Key —— 一条命令搞定，密钥不落盘不入库
+cp .env.example .env        # Windows: copy .env.example .env
+# 然后用编辑器打开 .env，填入 DEEPSEEK_API_KEY=sk-xxxx
 
-# 方式 B：复制模板后填写 config.json
+# 方式 B（二选一）：直接设置系统环境变量，密钥不落盘
+#   Windows PowerShell: $env:DEEPSEEK_API_KEY="sk-xxxx"
+#   macOS / Linux:      export DEEPSEEK_API_KEY=sk-xxxx
+
+# 方式 C：复制模板后填写 config.json（旧方式，密钥会写在配置文件里）
 cp config.example.json config.json   # Windows: copy config.example.json config.json
 
-# 方式 C：临时指定（仅本次命令）
+# 方式 D：临时指定（仅本次命令）
 python novel_rag.py ask --name 盘龙 "你的问题" --api-key sk-xxxxxxxx
 ```
+
+> 优先级：系统环境变量 > .env > config.json > 命令行参数；程序启动时会自动加载项目根目录的 .env。
 
 **嵌入模型（语义检索用，可选）：**
 
@@ -192,22 +221,33 @@ A：根据原文，叶凡在荒古禁地……（引用原文片段作答）
 python -m pytest tests/ -v
 ```
 
-覆盖范围：文本清洗规则（编码纠错 / 去广告 / 去页码）、句子切片边界、关键词检索回退路径。
+覆盖范围：文本清洗规则（编码纠错 / 去广告 / 去页码）、句子切片边界、关键词检索回退路径、
+嵌入模型解析与配置冷启动、指代消解前缀注入与章节聚合重排、向量归一化检索、
+API 客户端重试与响应解析、demo 自动注册与 cmd_demo 分支、cmd_ingest 同路径跳过。
 
-## 📈 效果评估思路
+69 项测试全过，0.9 秒内完成。
 
-- 构建「问题-标准答案」QA 集（忠于原著剧情、数字准确），用 **Recall@k** 评估检索召回；
-- 对生成答案做**忠实度人工抽检**：答案关键事实是否能在命中片段中找到依据、有无编造；
-- 对比 `top_k`、切片大小、是否重叠等参数对检索质量的影响。
+## 效果评估思路
 
+- 内置可执行评估脚本 eval_retrieval.py（无需 API Key、无需联网）：
+  `ash
+  # 对 demo 项目跑 12 道「问题-预期章节」QA，量化召回：
+  python eval_retrieval.py --name demo --top-k 3
+  # 输出示例：QA 总数: 12 / Recall@3 = 12/12 = 100.0%
+  `
+- 命中判定按「同章」（章节名前缀匹配），输出逐题命中章节明细，可 --json-out 导出；
+- 自建语料时，把 QA 集写成 JSON（question + 预期命中章节）即可换库复跑；
+- 对生成答案做**忠实度人工抽检**：答案关键事实是否能在命中片段中找到依据、有无编造。
 ## 🗺️ Roadmap
 
 - [x] 多项目管理 + 向量库导入
 - [x] 文本清洗、句子级切片、向量化与检索
 - [x] 多轮对话与 Prompt 模板外置
 - [x] CLI 一键管线（novel_rag.py：ingest / ask / chat / list / demo）
+- [x] 切片阶段保留真实章节标题，回答精确到「第 X 章」
+- [x] 指代消解前缀注入 + 章节聚合重排（novel_context.py，见「关键设计决策」）
+- [x] 内置 demo 向量库（随仓库预置，clone 后首跑自动注册；`--force` 可重建为真实语义向量）
 - [ ] 接入 CrossEncoder 重排（配置项已预留）
-- [ ] 切片阶段保留真实章节标题，回答精确到「第 X 章」
 - [ ] HTTP 服务接口，便于远程脚本化评估
 - [ ] 混合检索（BM25 + 向量）
 

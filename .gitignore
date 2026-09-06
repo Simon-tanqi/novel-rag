@@ -4,6 +4,7 @@ __pycache__/
 *.egg-info/
 .pytest_cache/
 .venv/
+.venv*/
 venv/
 
 # ===== 运行时自动生成（含用户隐私，不入库） =====
@@ -11,10 +12,16 @@ venv/
 config.json
 novel_config.json
 crash_log.txt
+# .env 含真实 API Key，只保留本地，用 .env.example 做模板
+.env
+.env.local
 
 # ===== 用户数据 / 受版权保护内容 =====
-# data/ 存放小说原文与向量库（版权语料），不入库；可用自建/开源小语料演示
-data/
+# data/ 存放小说原文与向量库（版权语料），不入库。
+# 例外：data/demo/ 为内置原创示例（无版权风险），预置向量库随仓库分发，
+# 保证 clone 后 0 分钟开箱即用（由 project_manager 自动注册）。
+data/*
+!data/demo/
 chat_logs/
 
 # ===== 测试与构建 =====

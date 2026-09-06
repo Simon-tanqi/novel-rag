@@ -34,16 +34,16 @@ import shutil
 import sys
 from typing import List, Optional
 
-from api_client import APIClient
+from api_client import APIClient, APIClientError
 from config_manager import ConfigManager
 from project_manager import ProjectManager
 from rag_retriever import RAGRetriever
 from step1_clean import RULE_FUNCTIONS, clean_file
 from step2_split_embed import build_vector_index_from_file
-from utils import DEFAULT_EMBEDDING_MODEL
+from utils import DEFAULT_EMBEDDING_MODEL, load_env_file
 
-
-# ===================== 基础 =====================
+# 最先加载项目根目录 .env（幂等，仅补未设置键）
+load_env_file()
 
 def _enable_utf8_stdout():
     """Windows 控制台默认 GBK，切换为 UTF-8 输出避免编码报错"""
@@ -162,11 +162,14 @@ def cmd_ingest(args) -> None:
     )
     project_id = project["id"]
 
-    # 1) 复制原文到项目源目录
+    # 1) 复制原文到项目源目录（已在目标位置则跳过，避免同文件复制报错）
     source_target = project["source_path"]
     os.makedirs(os.path.dirname(source_target), exist_ok=True)
-    print(f"① 复制原文 → {source_target}")
-    shutil.copy2(args.file, source_target)
+    if os.path.abspath(args.file) == os.path.abspath(source_target):
+        print(f"① 源文件已在项目源目录，跳过复制: {source_target}")
+    else:
+        print(f"① 复制原文 → {source_target}")
+        shutil.copy2(args.file, source_target)
 
     # 2) 清洗
     print("② 文本清洗 ...")
@@ -333,30 +336,74 @@ def cmd_list(_args) -> None:
         print(f"{p['name']:<16} {status:<10} {p.get('vector_db_path', '')}")
 
 
-def cmd_demo(_args) -> None:
-    """生成原创示例小说并跑通全流程，验证环境可用"""
-    demo_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "_demo")
-    os.makedirs(demo_dir, exist_ok=True)
-    demo_file = os.path.join(demo_dir, "demo_novel.txt")
+def cmd_demo(args) -> None:
+    """内置原创 demo：优先复用随仓库预置的向量库；全新环境则完整构建。
 
-    story = _DEMO_STORY
+    路径：
+      1) demo 已注册且向量库就绪 → 打印就绪信息 + 尝鲜问题卡
+      2) data/demo 数据在但未注册（clone 后首跑）→ ensure_demo_project 自动注册复用
+      3) 全新环境 → 生成原文到 data/demo/source → 走 cmd_ingest 完整构建
+
+    --force: 删除现有 demo 项目与数据目录后重建（如升级为真实语义向量库）
+    --no-embedding: 强制纯关键词模式，不触发嵌入模型下载
+    """
+    root = os.path.dirname(os.path.abspath(__file__))
+    demo_source_dir = os.path.join(root, "data", "demo", "source")
+    demo_file = os.path.join(demo_source_dir, "demo_novel.txt")
+
+    pm = ProjectManager()
+    project = pm.get_project_by_name("demo")
+
+    # --force：删除现有 demo 项目（delete_project 连带删除 data/demo 目录）
+    if args.force and project:
+        print(f"✓ 已指定 --force，删除现有 demo 项目并重建 ...")
+        pm.delete_project(project["id"])
+        project = None
+
+    # 目录可能在删除/重建后已不存在，此处统一重新创建
+    os.makedirs(demo_source_dir, exist_ok=True)
+
+    if project:
+        vector_path = project.get("vector_db_path", "")
+        has_vectors = bool(vector_path) and os.path.isfile(
+            os.path.join(vector_path, "embeddings.npy"))
+        mode = "语义向量库" if has_vectors else "关键词检索模式（未含向量文件）"
+        print(f"✓ demo 项目已就绪（{mode}），可直接问答：")
+        print(f"    python novel_rag.py ask --name demo \"灰衣老者是谁？\"")
+        print(f"  或开 GUI: python main.py")
+        if not has_vectors:
+            print("  提示: 如需真实语义向量库，先安装 sentence-transformers，再执行 demo --force")
+        print_demo_qa()
+        return
+
+    # 写入/更新 demo 原文（幂等；force 重建后目录已重新创建）
     with open(demo_file, "w", encoding="utf-8") as f:
-        f.write(story)
-    print(f"✓ 已生成原创示例小说（{len(story)} 字，公有领域风格，无版权风险）: {demo_file}")
+        f.write(_DEMO_STORY)
 
-    args = argparse.Namespace(
+    # 数据在但未注册（如删除 novel_config.json 后）→ ensure 自动注册复用
+    pm.ensure_demo_project()
+    project = pm.get_project_by_name("demo")
+    if project:
+        print(f"✓ demo 项目已注册（复用 data/demo 现有数据），向量库: "
+              f"{project['vector_db_path']}")
+        print_demo_qa()
+        return
+
+    # 全新构建：完整 ingest 流程（清洗 → 切片 → 向量化 → 注册）
+    print(f"✓ 已生成原创示例小说（{len(_DEMO_STORY)} 字，虚构无版权）: {demo_file}")
+    ingest_args = argparse.Namespace(
         file=demo_file,
         name="demo",
         chunk_size=500,
         overlap=50,
         rules=None,
         words=None,
-        # demo 用于离线验证：强制关键词模式，不触发模型下载
-        embedding="",
+        # 默认与 ingest 一致（config/环境变量/内置 bge 模型）；
+        # --no-embedding 时强制关键词模式，不触发模型下载
+        embedding="" if getattr(args, "no_embedding", False) else None,
     )
-    cmd_ingest(args)
-    print("\n环境验证完成。接下来可以:")
-    print("  python novel_rag.py ask --name demo \"青云剑诀的心法口诀是什么？\"")
+    cmd_ingest(ingest_args)
+    print_demo_qa()
 
 
 # 原创示例小说（用于 demo / 冒烟测试；内容为虚构创作，无版权风险）
@@ -402,6 +449,58 @@ _DEMO_STORY = """第一章 山门初开
 """
 
 
+# 内置 demo 尝鲜问题卡（问题 + 参考答案 + 预期章节）
+# 供 eval_retrieval.py 评估与 CLI demo 命令共用（单一事实源）；
+# 答案均出自 _DEMO_STORY 原文，可向 demo 项目直接提问验证。
+DEMO_QA = [
+    {"question": "青云剑诀的心法口诀是什么？",
+     "answer": "剑随云走，意在剑先。",
+     "chapter": "第三章 青云剑诀"},
+    {"question": "沈青为何会被罚每日多劈柴两个时辰？",
+     "answer": "柳青山认为他太聪明、聪明人会走捷径，罚他磨心性。",
+     "chapter": "第三章 青云剑诀"},
+    {"question": "剑庐第一课教什么？",
+     "answer": "心要静（大师兄赵铁山先让他扫三百块青砖，言“剑庐第一课：心要静”；老者亦言“不教剑，教做人”）。",
+     "chapter": "第二章 剑庐第一课"},
+    {"question": "沈青用什么招式击败了李彪？",
+     "answer": "雨落——剑不出鞘，只以剑鞘轻点李彪手腕，钢刀落地。",
+     "chapter": "第四章 井水之争"},
+    {"question": "剑开天门是什么意思？",
+     "answer": "不是破天，是破自己的心障。",
+     "chapter": "第五章 剑开天门"},
+    {"question": "灰衣老者是谁？",
+     "answer": "剑庐主人柳青山（沈青入门后揭晓）。",
+     "chapter": "第二章 剑庐第一课"},
+    {"question": "沈青背的是什么书？",
+     "answer": "《青山药典》（家祖行医留下的）。",
+     "chapter": "第一章 山门初开"},
+    {"question": "沈青下山那年村里的井被谁占了？",
+     "answer": "邻村钱庄的护院李彪，仗着学过拳脚说是他家祖产，要每月两贯钱。",
+     "chapter": "第四章 井水之争"},
+    {"question": "沈青学完雨落用了多久？",
+     "answer": "第三年秋才把“雨落”练满一万遍（约三年）。",
+     "chapter": "第三章 青云剑诀"},
+    {"question": "青云剑诀共几式？",
+     "answer": "共七式：云起、山隐、雨落……第七式剑开天门（压箱底）。",
+     "chapter": "第三章 青云剑诀"},
+    {"question": "沈青在井边立碑刻了什么字？",
+     "answer": "“剑庐第一课，教做人”。",
+     "chapter": "第四章 井水之争"},
+    {"question": "大师兄给了沈青什么？",
+     "answer": "一把扫帚（让他先扫干净前院三百块青砖）。",
+     "chapter": "第二章 剑庐第一课"},
+]
+
+
+def print_demo_qa() -> None:
+    """打印 demo 尝鲜问题卡：照着问必有答案（用于 demo 命令收尾/就绪提示）"""
+    print("\n  尝鲜问题卡（照着问，答案都出自 demo 原文）：")
+    for i, qa in enumerate(DEMO_QA, 1):
+        print(f"    {i:>2}. {qa['question']}")
+        print(f"       参考答案: {qa['answer']}")
+    print("\n  例如: python novel_rag.py ask --name demo \"沈青背的是什么书？\"")
+
+
 # ===================== CLI =====================
 
 def build_parser() -> argparse.ArgumentParser:
@@ -438,7 +537,18 @@ def build_parser() -> argparse.ArgumentParser:
     p_list = sub.add_parser("list", help="列出本地项目")
     p_list.set_defaults(func=cmd_list)
 
-    p_demo = sub.add_parser("demo", help="生成原创示例小说并跑通全流程")
+    p_demo = sub.add_parser(
+        "demo",
+        help="内置原创示例小说：优先复用预置向量库，或一键完整构建",
+    )
+    p_demo.add_argument(
+        "--force", action="store_true",
+        help="删除现有 demo 项目与数据后重建（如升级为真实语义向量库）",
+    )
+    p_demo.add_argument(
+        "--no-embedding", action="store_true",
+        help="强制纯关键词模式，不触发嵌入模型下载（离线冒烟）",
+    )
     p_demo.set_defaults(func=cmd_demo)
 
     return parser
@@ -447,4 +557,13 @@ def build_parser() -> argparse.ArgumentParser:
 if __name__ == "__main__":
     _enable_utf8_stdout()
     args = build_parser().parse_args()
-    args.func(args)
+    try:
+        args.func(args)
+    except APIClientError as e:
+        # API 调用失败（网络 / 鉴权 / 限流重试耗尽）：友好提示而非堆栈崩溃
+        print(f"✗ API 调用失败: {e.message}")
+        print("  请检查网络连接、config.json 中的 api_url/api_key，或稍后重试。")
+        sys.exit(1)
+    except KeyboardInterrupt:
+        print("\n已取消")
+        sys.exit(130)
