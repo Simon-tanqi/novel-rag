@@ -11,9 +11,16 @@ import threading
 import traceback
 from datetime import datetime
 
-import customtkinter as ctk
-import tkinter.messagebox
-import tkinter.filedialog
+# 优先尝试导入 GUI 依赖。测试/CI 环境可能没装 customtkinter，
+# 不影响纯逻辑测试（如 _api_timeout_check 标志位逻辑）。
+try:
+    import customtkinter as ctk
+    import tkinter.messagebox
+    import tkinter.filedialog
+    _GUI_AVAILABLE = True
+except ImportError:
+    ctk = None  # type: ignore
+    _GUI_AVAILABLE = False
 
 from config_manager import ConfigManager
 from project_manager import ProjectManager
@@ -23,10 +30,11 @@ from chat_logger import ChatLogger
 from message_bubble import MessageBubble
 from settings_window import SettingsWindow
 from project_wizard import ProjectWizard
-from utils import get_root_dir
+from utils import get_root_dir, get_compute_device
 
-ctk.set_appearance_mode("dark")
-ctk.set_default_color_theme("blue")
+if _GUI_AVAILABLE:
+    ctk.set_appearance_mode("dark")
+    ctk.set_default_color_theme("blue")
 
 # 最大对话轮数
 MAX_TURNS = 15
@@ -44,6 +52,7 @@ class NovelRAGApp(ctk.CTk):
 
         # 当前状态
         self.current_project = None
+        self.current_device = get_compute_device()  # GPU 加速可用时显示在 sidebar
         self.chat_logger = ChatLogger()
         self.messages = []
         self.turn_count = 0
@@ -70,11 +79,16 @@ class NovelRAGApp(ctk.CTk):
 
     # ===================== 项目管理 =====================
 
+    def _detect_device(self) -> str:
+        """探测当前计算设备（cuda/cpu）— 不跳慢，只查 torch.is_available"""
+        try:
+            import torch
+            return "cuda" if torch.cuda.is_available() else "cpu"
+        except (ImportError, AttributeError, OSError):
+            return "cpu"
+
     def _load_current_project(self):
         """加载当前项目"""
-        self.current_project = self.project_manager.get_current_project()
-        if self.current_project:
-            self.chat_logger.set_project(self.current_project["name"])
 
     def set_project(self, project_id: str):
         """切换当前项目"""
@@ -97,27 +111,77 @@ class NovelRAGApp(ctk.CTk):
 
         self.status_label.configure(text=f"✓ 已切换到项目: {project['name']}")
 
+    def _detect_device(self) -> str:
+        """检测推理设备（cuda 可用返回 cuda，否则 cpu）"""
+        try:
+            import torch
+            if torch.cuda.is_available():
+                return "cuda"
+        except ImportError:
+            pass
+        return "cpu"
+
     def _update_sidebar_project_info(self):
-        """更新侧边栏项目信息"""
-        if self.current_project:
-            project_name = self.current_project["name"]
-            status = self.project_manager.get_project_status(self.current_project["id"])
-
-            status_map = {
-                "ready": "✅ 就绪",
-                "keyword_only": "⚠ 仅关键词模式(缺向量库)",
-                "created": "⚠ 待处理",
-                "cleaned": "📝 已清洗",
-                "not_ready": "⏳ 未就绪",
-                "error": "❌ 错误"
-            }
-            status_text = status_map.get(status, "未知")
-
-            self.project_info_label.configure(
-                text=f"📚 当前项目: {project_name}\n状态: {status_text}"
-            )
-        else:
+        """更新侧边栏项目信息（所见即所得）"""
+        if not self.current_project:
             self.project_info_label.configure(text="📚 当前项目: 未选择")
+            return
+
+        project = self.current_project
+        pid = project.get("id", "")
+        runtime = self.project_manager.get_project_runtime(pid)
+        status = runtime.get("status", "unknown")
+        chunk_count = runtime.get("chunk_count", 0)
+        has_emb = runtime.get("has_embeddings", False)
+        is_external = runtime.get("is_external", False)
+        emb_mb = runtime.get("embeddings_size_mb", 0.0)
+        vector_path = runtime.get("vector_db_path", "")
+
+        # Embedding 模型 / 设备
+        cfg = self.config_manager
+        emb_model = (cfg.get("embedding_model_path") or "").strip() or "(未配置)"
+        emb_name = emb_model.split("/")[-1] if "/" in emb_model else emb_model
+        device = self.current_device or "cpu"
+
+        # 路径摘要（只显示 data/ 后的部分）
+        if vector_path:
+            tail = vector_path.replace("\\", "/").split("data/")[-1]
+            path_summary = f"data/{tail}" if "data/" in vector_path else vector_path[-40:]
+        else:
+            path_summary = "(无)"
+
+        # 主行
+        status_main = {
+            "ready": "✅",
+            "keyword_only": "⚠",
+            "created": "⏳",
+            "cleaned": "📝",
+            "not_ready": "⏳",
+            "error": "❌",
+            "unknown": "❓",
+        }.get(status, "❓")
+        main_line = f"{status_main} {project['name']}"
+
+        # 详情
+        if status == "ready":
+            if is_external:
+                detail = f"⚠ 外部路径\n{chunk_count} 段 · {emb_mb}MB\n{emb_name} ({device})\n{path_summary}"
+            else:
+                detail = f"{chunk_count} 段 · {emb_mb}MB\n{emb_name} ({device})\n{path_summary}"
+        elif status == "keyword_only":
+            detail = f"⚠ 仅关键词模式\nmetadata 存在但 npy 缺失\n{path_summary}"
+        elif status in ("cleaned", "created", "not_ready"):
+            detail = f"⚠ 尚未向量化\n{path_summary}"
+        else:
+            detail = f"{status}\n{path_summary}"
+
+        # Fallback 提示（current_project_id 指向与实际使用不一致）
+        fallback_hint = ""
+        current_id = self.project_manager.config.get("current_project_id")
+        if current_id and current_id != pid:
+            fallback_hint = f"\n\n⚠ 已自动切换\n原选: [{current_id[:20]}…]\n现在用: {project['name']}"
+
+        self.project_info_label.configure(text=main_line + "\n" + detail + fallback_hint)
 
     # ===================== 界面创建 =====================
 
@@ -564,29 +628,67 @@ class NovelRAGApp(ctk.CTk):
         list_frame.pack(fill="both", expand=True, padx=15, pady=15)
 
         # 项目列表
+        current_pid = self.project_manager.config.get("current_project_id")
+        active_pid = self.current_project.get("id") if self.current_project else None
+
         for project in projects:
-            status = self.project_manager.get_project_status(project["id"])
+            rt = self.project_manager.get_project_runtime(project["id"])
+            status = rt["status"]
+            chunk_count = rt["chunk_count"]
+            has_emb = rt["has_embeddings"]
+            is_external = rt["is_external"]
+            emb_mb = rt["embeddings_size_mb"]
+
+            # 路径摘要
+            vpath = rt["vector_db_path"]
+            path_tail = vpath.replace("\\", "/").split("data/")[-1] if "data/" in vpath else vpath[-35:]
+            path_summary = f"data/{path_tail}" if "data/" in vpath else vpath
+
+            # 状态图标
             status_icons = {
                 "ready": "✅",
-                "created": "⚠",
+                "keyword_only": "⚠",
+                "created": "⏳",
                 "cleaned": "📝",
                 "not_ready": "⏳",
                 "error": "❌"
             }
             icon = status_icons.get(status, "❓")
 
+            # 主行
+            main_line = f"{icon} {project['name']}  ({status})"
+            if status == "ready":
+                if is_external:
+                    main_line += f"\n   {chunk_count} 段 · {emb_mb}MB · ⚠外部路径"
+                else:
+                    main_line += f"\n   {chunk_count} 段 · {emb_mb}MB"
+            elif status == "keyword_only":
+                main_line += f"\n   仅关键词检索 · npy 缺失"
+            elif status in ("cleaned", "created"):
+                main_line += f"\n   尚未向量化"
+            main_line += f"\n   路径: {path_summary}"
+
+            # 当前在用 / 自动选中标记
+            badges = []
+            if project["id"] == active_pid:
+                badges.append("🔵正在用")
+            if current_pid and project["id"] != active_pid and status == "ready":
+                badges.append("⚠自动选")
+            if badges:
+                main_line += f"\n   {' · '.join(badges)}"
+
             # 项目卡片
             card = ctk.CTkFrame(list_frame, fg_color="#2C2C2C", corner_radius=10)
             card.pack(fill="x", pady=5, padx=5)
 
-            info_text = f"{icon} {project['name']}  (状态: {status})"
             info_label = ctk.CTkLabel(
                 card,
-                text=info_text,
-                font=("Microsoft YaHei UI", 12),
-                anchor="w"
+                text=main_line,
+                font=("Microsoft YaHei UI", 11),
+                anchor="w",
+                justify="left"
             )
-            info_label.pack(side="left", padx=15, pady=12)
+            info_label.pack(side="left", padx=15, pady=10)
 
             # 选择按钮
             select_btn = ctk.CTkButton(
@@ -852,7 +954,7 @@ class NovelRAGApp(ctk.CTk):
         self._scroll_to_bottom()
 
         # 更新状态
-        self.status_label.configure(text="状态: 正在检索与生成...")
+        self.status_label.configure(text="状态: 准备中...")
 
         # 在后台线程中调用API
         thread = threading.Thread(target=self._call_api, args=(message,))
@@ -863,20 +965,30 @@ class NovelRAGApp(ctk.CTk):
         """调用AI API（后台线程）"""
         self.api_start_time = time.time()
         self.api_timeout = False
+        self.api_completed = False  # 新增：API 调用完成（成功或失败）后置 True
+        self.api_error = False       # 新增：用于区分 "超时" 和 "错误"
 
         # 超时检测线程
         timeout_thread = threading.Thread(target=self._api_timeout_check)
         timeout_thread.daemon = True
         timeout_thread.start()
 
+        def _mark_completed(success: bool = True):
+            """标记 API 调用已结束（让超时线程能及时退出）"""
+            self.api_completed = True
+            self.api_timeout = not success  # 成功 → False（不超时）；失败 → 由调用方决定
+            self.api_error = not success
+
         try:
             # 获取选中的模型（防御：未配置时 model_combobox 是占位按钮，无 .get()）
             if not hasattr(self.model_combobox, "get"):
+                _mark_completed(success=True)
                 self.after(0, lambda: self.status_label.configure(text="状态: 请先配置AI模型"))
                 self.after(0, lambda: self._add_ai_message("尚未配置AI模型，请点击右下角「系统设置」填入API Key后重试。"))
                 return
             selected_model_name = self.model_combobox.get()
             if not selected_model_name:
+                _mark_completed(success=True)
                 self.after(0, lambda: self.status_label.configure(text="状态: 请先配置AI模型"))
                 return
 
@@ -888,10 +1000,12 @@ class NovelRAGApp(ctk.CTk):
                     break
 
             if not selected_model:
+                _mark_completed(success=True)
                 self.after(0, lambda: self.status_label.configure(text="状态: 模型配置不存在"))
                 return
 
             if selected_model.get("is_local", False):
+                _mark_completed(success=True)
                 self.after(0, lambda: self.status_label.configure(text="状态: 本地模型暂未实现"))
                 self.after(0, lambda: self._add_ai_message("本地模型功能正在开发中..."))
                 return
@@ -901,6 +1015,7 @@ class NovelRAGApp(ctk.CTk):
             model_name = selected_model.get("model_id", selected_model.get("name", ""))
 
             if not api_url or not api_key:
+                _mark_completed(success=True)
                 self.after(0, lambda: self.status_label.configure(text="状态: 请先配置API设置"))
                 return
 
@@ -915,16 +1030,39 @@ class NovelRAGApp(ctk.CTk):
             vector_file = self.current_project.get("vector_file", "")
             metadata_file = self.current_project.get("metadata_file", "")
             reranker_path = self.config_manager.get("reranker_model_path", "")
+            enable_rerank = bool(self.config_manager.get("enable_rerank", False))
 
             if vector_path and os.path.exists(vector_path) and prompt_template:
-                self.after(0, lambda: self.status_label.configure(text="状态: 正在检索向量数据..."))
+                self.after(0, lambda: self.status_label.configure(text="状态: 正在加载检索引擎（首次需 5-15s）..."))
 
-                retriever = RAGRetriever.get_or_create(
-                    vector_path, reranker_path, embedding_path,
-                    vector_file=vector_file,
-                    metadata_file=metadata_file
-                )
-                hits = retriever.retrieve(message, top_k=top_k)
+                # 启动进度心跳线程，让用户看到系统在干活（每秒更新状态栏）
+                progress_stop = [False]
+                def _progress_heartbeat():
+                    t0 = time.time()
+                    while not progress_stop[0]:
+                        time.sleep(1)
+                        if progress_stop[0]:
+                            break
+                        elapsed = int(time.time() - t0)
+                        try:
+                            self.after(0, lambda e=elapsed: self.status_label.configure(
+                                text=f"状态: 正在加载检索引擎... {e}s"
+                            ))
+                        except Exception:
+                            break
+
+                heartbeat_thread = threading.Thread(target=_progress_heartbeat, daemon=True)
+                heartbeat_thread.start()
+
+                try:
+                    retriever = RAGRetriever.get_or_create(
+                        vector_path, reranker_path, embedding_path,
+                        vector_file=vector_file,
+                        metadata_file=metadata_file
+                    )
+                    hits = retriever.retrieve(message, top_k=top_k, enable_rerank=enable_rerank)
+                finally:
+                    progress_stop[0] = True
 
                 if hits:
                     context = "\n\n---\n\n".join(
@@ -946,11 +1084,13 @@ class NovelRAGApp(ctk.CTk):
 
             api_client = APIClient(api_url, api_key, model_name)
             reply = api_client.call_api(final_prompt, enable_thinking)
+            _mark_completed(success=True)  # API 已成功返回 → 告诉 timeout 线程别报警
 
             if not self.api_timeout:
                 self.after(0, lambda r=reply: self._add_ai_message(r))
 
         except Exception as e:
+            _mark_completed(success=False)  # API 失败 → 防止 timeout 线程重复报警
             if not self.api_timeout:
                 error_msg = f"API调用异常: {str(e)}"
                 print(f"API Error: {traceback.format_exc()}")
@@ -958,18 +1098,23 @@ class NovelRAGApp(ctk.CTk):
                 self.after(0, lambda: self.status_label.configure(text="状态: 错误"))
 
     def _api_timeout_check(self):
-        """API超时检测"""
-        timeout_seconds = 120
+        """API超时检测（根据 api_completed 标志提前退出）"""
+        timeout_seconds = 90
         check_interval = 1
 
         while time.time() - self.api_start_time < timeout_seconds:
             time.sleep(check_interval)
+            # 关键：API 成功后 api_completed=True，立即退出循环
+            if self.api_completed:
+                return
             elapsed = int(time.time() - self.api_start_time)
-            status_text = f"状态: 处理中 ({elapsed}秒)"
+            status_text = f"状态: AI生成中... {elapsed}s"
             self.after(0, lambda t=status_text: self.status_label.configure(text=t))
 
-        if not self.api_timeout:
+        # 超时：只有在 API 仍未完成时才报警
+        if not self.api_completed:
             self.api_timeout = True
+            self.api_error = True
             self.after(0, lambda: self.status_label.configure(text="状态: 超时"))
             self.after(0, lambda: self._show_error("请求超时，服务器响应时间过长。请检查网络连接或稍后重试。"))
 

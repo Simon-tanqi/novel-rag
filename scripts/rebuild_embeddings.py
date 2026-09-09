@@ -5,8 +5,8 @@ rebuild_embeddings.py — 重新生成 embeddings.npy，不重新切片
 加载失败，自动降级到关键词模式，status 被错误地设成 ready）
 
 用法（PowerShell）：
-    $env:HF_ENDPOINT = "https://hf-mirror.com"
     python scripts/rebuild_embeddings.py
+（嵌入模型已随仓库分发在 models/ 下，无需联网；如需下载更大模型可设 HF_ENDPOINT）
 """
 import os
 import sys
@@ -73,7 +73,7 @@ def progress(step, total, msg, pct=0):
     bar_len = 30
     filled = int(bar_len * pct / 100)
     bar = "█" * filled + "░" * (bar_len - filled)
-    print(f"\r  [{bar}] {pct:3d}%  {msg[:50]}", end="", flush=True)
+    print(f"\r  [{bar}] {pct:3.0f}%  {msg[:50]}", end="", flush=True)
 
 t0 = time.time()
 ok = build_vector_index_from_file(

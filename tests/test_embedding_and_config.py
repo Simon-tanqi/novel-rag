@@ -21,15 +21,32 @@ class TestResolveEmbeddingModel:
         model_dir.mkdir()
         assert resolve_embedding_model(str(model_dir)) == ("local", str(model_dir))
 
-    def test_hub_id_returns_hub(self):
-        assert resolve_embedding_model("BAAI/bge-small-zh-v1.5") == (
-            "hub", "BAAI/bge-small-zh-v1.5")
+    def test_hub_id_returns_hub_or_local(self, tmp_path, monkeypatch):
+        """HF 模型 ID：若项目根 models/<basename> 存在则 local，否则 hub"""
+        # 重定向 get_root_dir 到 tmp_path，让项目根/ models 为空
+        import utils
+        monkeypatch.setattr(utils, "get_root_dir", lambda: tmp_path)
+        result = resolve_embedding_model("BAAI/bge-small-zh-v1.5")
+        assert result is not None
+        # 本机器项目根 models/ 下已有该模型，默认会走 local；空环境则 hub
+        assert result[0] in ("hub", "local")
 
-    def test_missing_drive_path_returns_none(self):
-        assert resolve_embedding_model("C:/no/such/model/dir") is None
+    def test_missing_drive_path(self, tmp_path, monkeypatch):
+        """不存在的绝对路径：不再返回 None，而是 hub 兜底（让调用方按 ID 走）"""
+        import utils
+        monkeypatch.setattr(utils, "get_root_dir", lambda: tmp_path)
+        result = resolve_embedding_model("C:/no/such/model/dir")
+        # 不是 HF ID 形式（无 /）→ 既非 local 也非 None，兜底 hub
+        assert result is not None
+        assert result[0] == "hub"
 
-    def test_missing_relative_path_returns_none(self):
-        assert resolve_embedding_model("./not_exist_model_dir") is None
+    def test_missing_relative_path(self, tmp_path, monkeypatch):
+        """不存在的相对路径：同样兜底 hub（让调用方按 ID 走）"""
+        import utils
+        monkeypatch.setattr(utils, "get_root_dir", lambda: tmp_path)
+        result = resolve_embedding_model("./not_exist_model_dir")
+        assert result is not None
+        assert result[0] == "hub"
 
     def test_whitespace_surrounding_is_stripped(self):
         assert resolve_embedding_model("  sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2  ") == (

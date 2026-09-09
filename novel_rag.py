@@ -26,7 +26,7 @@ API Key 提供方式（任选其一，优先级从高到低）：
 
 嵌入模型（语义检索，可选）：
     默认使用 BAAI/bge-small-zh-v1.5（首次自动下载缓存）；
-    也可填本地模型目录路径，或清空以使用纯关键词检索。
+    也可填本地模型目录路径（如 models/bge-small-zh-v1.5）实现纯离线加载，或清空以使用纯关键词检索。
 """
 import argparse
 import os
@@ -265,10 +265,12 @@ def cmd_ask(args) -> None:
     prompt_template = cfg.get_prompt_template()
     top_k = int(cfg.get("top_k", 3))
     enable_thinking = cfg.get("enable_thinking", False)
+    # 重排：命令行 --rerank/--no-rerank 优先，否则取 config.enable_rerank
+    enable_rerank = args.rerank if args.rerank is not None else bool(cfg.get("enable_rerank", False))
 
     retriever = _prepare_retriever(cfg, project)
     print("🔍 正在检索原文片段 ...")
-    hits = retriever.retrieve(args.question, top_k=top_k)
+    hits = retriever.retrieve(args.question, top_k=top_k, enable_rerank=enable_rerank)
     context = _build_context(hits)
 
     if prompt_template:
@@ -304,6 +306,8 @@ def cmd_chat(args) -> None:
     prompt_template = cfg.get_prompt_template()
     top_k = int(cfg.get("top_k", 3))
     enable_thinking = cfg.get("enable_thinking", False)
+    # 重排：命令行 --rerank/--no-rerank 优先，否则取 config.enable_rerank
+    enable_rerank = args.rerank if args.rerank is not None else bool(cfg.get("enable_rerank", False))
     retriever = _prepare_retriever(cfg, project)
     novel_name = project.get("name", "")
 
@@ -322,7 +326,7 @@ def cmd_chat(args) -> None:
             print("再见！")
             break
 
-        hits = retriever.retrieve(question, top_k=top_k)
+        hits = retriever.retrieve(question, top_k=top_k, enable_rerank=enable_rerank)
         context = _build_context(hits)
 
         # 多轮历史：截取最近 20 条消息（约 10 轮），单条截断 200 字（与 GUI 一致）
@@ -553,12 +557,16 @@ def build_parser() -> argparse.ArgumentParser:
     p_ask.add_argument("--top-k", type=int, help="召回片段数（默认取 config）")
     p_ask.add_argument("--api-key", help="临时指定 API Key")
     p_ask.add_argument("--model-id", help="临时指定模型 ID")
+    p_ask.add_argument("--rerank", action="store_true", default=None, help="强制开启 CrossEncoder 重排（覆盖 config）")
+    p_ask.add_argument("--no-rerank", action="store_false", dest="rerank", help="强制关闭重排（覆盖 config）")
     p_ask.set_defaults(func=cmd_ask)
 
     p_chat = sub.add_parser("chat", help="交互式多轮 RAG 问答")
     p_chat.add_argument("--name", help="项目名（默认最近使用的项目）")
     p_chat.add_argument("--api-key", help="临时指定 API Key")
     p_chat.add_argument("--model-id", help="临时指定模型 ID")
+    p_chat.add_argument("--rerank", action="store_true", default=None, help="强制开启 CrossEncoder 重排（覆盖 config）")
+    p_chat.add_argument("--no-rerank", action="store_false", dest="rerank", help="强制关闭重排（覆盖 config）")
     p_chat.set_defaults(func=cmd_chat)
 
     p_list = sub.add_parser("list", help="列出本地项目")

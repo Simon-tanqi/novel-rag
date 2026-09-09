@@ -37,10 +37,11 @@ class APIClient:
 
     # 重试有意义的 HTTP 状态码：429 限流、5xx 服务端临时故障
     RETRYABLE_STATUS = {408, 429, 500, 502, 503, 504}
-    DEFAULT_TIMEOUT = 120
+    DEFAULT_TIMEOUT = 60
+    DEFAULT_MAX_RETRIES = 2
 
     def __init__(self, api_url: str, api_key: str, model_name: str,
-                 max_retries: int = 3, timeout: Optional[int] = None,
+                 max_retries: Optional[int] = None, timeout: Optional[int] = None,
                  retry_backoff: float = 1.0):
         """
         初始化API客户端
@@ -56,7 +57,8 @@ class APIClient:
         self.api_url = self._normalize_url(api_url)
         self.api_key = api_key
         self.model_name = model_name
-        self.max_retries = max_retries
+        self.max_retries = (max_retries if max_retries is not None
+                            else self.DEFAULT_MAX_RETRIES)
         self.timeout = timeout or self.DEFAULT_TIMEOUT
         self.retry_backoff = retry_backoff
 

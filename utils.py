@@ -91,25 +91,28 @@ def to_absolute_path(rel_path: str) -> str:
 # ===================== 嵌入模型 =====================
 
 # 开箱即用的默认嵌入模型（HuggingFace 模型 ID）。
-# 不配置时自动使用该模型做语义检索；首次使用会自动下载并缓存。
-# 中文小说场景推荐 bge-small-zh-v1.5（约 95MB，CPU 可跑）。
+# 不配置时自动使用该模型做语义检索。
+# 也可填本地模型目录（如 models/bge-small-zh-v1.5）实现纯离线加载。
+# 首次使用 HF 模型 ID 时，会自动下载到项目根 models/ 目录，无需联网到 ~/.cache。
+# 中文小说场景推荐 bge-small-zh-v1.5（约 95MB，GPU/CPU 均可跑）。
 DEFAULT_EMBEDDING_MODEL = "BAAI/bge-small-zh-v1.5"
 
 
 def resolve_embedding_model(spec: Optional[str]):
     """
-    解析嵌入模型配置：兼容「本地目录」与「HuggingFace 模型 ID」两种写法。
+    智能识别模型来源：本地目录优先，HF 模型 ID 兜底。
 
-    返回:
-        ('local', path)  本地模型目录（已存在）
-        ('hub', name)    HuggingFace 模型 ID（首次使用自动下载并缓存）
-        None             未配置 / 本地目录不存在 / 明显无效
+    查找顺序（找到即返回）：
+    1. 空 → None（调用方降级关键词检索，不阻断流程）
+    2. 绝对路径且目录存在 → ('local', abs)
+    3. 相对路径：先按 cwd 解析，再按项目根解析（兼容 GUI 启动时 cwd 不在项目根）
+    4. 形如 org/name 的 HF ID，且 <root>/models/<basename>/ 存在 → ('local', <root>/models/<basename>)
+    5. 都失败 → ('hub', spec)（由 load_embedding_model 自动下载到 <root>/models/<basename>/）
 
-    设计说明：
-    - 空值 → None（调用方降级为关键词检索，不阻断流程）；
-    - 以盘符、./、.. 开头或包含反斜杠 → 视为本地路径，不存在时返回 None 并提示；
-    - 其余（如 BAAI/bge-small-zh-v1.5）→ 视为 HF 模型 ID，交给
-      sentence-transformers 在线下载缓存。
+    Returns:
+        ('local', path)  本地目录（已验证存在）
+        ('hub', hf_id)   HuggingFace 模型 ID（需下载）
+        None             未配置 / 无效
     """
     if not spec:
         return None
@@ -117,20 +120,37 @@ def resolve_embedding_model(spec: Optional[str]):
     if not spec:
         return None
 
-    looks_like_path = (
-        re.match(r'^[A-Za-z]:[\\/]', spec) is not None
-        or spec.startswith(('.', os.sep))
-        or os.sep in spec
-        or os.path.isdir(spec)
-        or os.path.exists(spec)
-    )
+    # 1) 当作本地路径尝试
+    candidates: list = []
+    if os.path.isabs(spec):
+        candidates.append(spec)
+    else:
+        # 相对路径：先按 cwd 解析（兼容 import 时的 cwd）
+        try:
+            candidates.append(os.path.abspath(spec))
+        except Exception:
+            pass
+        # 再按项目根解析（关键：GUI 启动时 cwd 不在项目根的情况）
+        try:
+            candidates.append(str(get_root_dir() / spec))
+        except Exception:
+            pass
 
-    if looks_like_path:
-        if os.path.isdir(spec):
-            return ('local', spec)
-        print(f"⚠ 本地模型目录不存在（将使用关键词检索）: {spec}")
-        return None
+    for p in candidates:
+        if os.path.isdir(p):
+            return ('local', p)
 
+    # 2) 形如 org/name 的 HF ID：检查项目根/models/<basename>/
+    if re.match(r'^[\w.-]+/[\w.-]+$', spec):
+        try:
+            root = get_root_dir()
+            default_local = root / "models" / spec.split('/')[-1]
+            if default_local.is_dir():
+                return ('local', str(default_local))
+        except Exception:
+            pass
+
+    # 3) 兜底：HF 模型 ID（由 load_embedding_model 负责下载到项目根/models/）
     return ('hub', spec)
 
 
@@ -166,9 +186,40 @@ def get_compute_device() -> str:
     return device
 
 
+def _try_download_to_local_models(model_id: str) -> Optional[str]:
+    """
+    下载 HF 模型到项目根 models/<basename>/ 目录。
+    成功返回本地绝对路径，失败返回 None。
+
+    优先尝试用户设置的 HF_ENDPOINT（国内 hf-mirror），
+    下载的 .safetensors / .bin 等核心权重保留 README/TXT 等冗余文件不下载。
+    """
+    try:
+        from huggingface_hub import snapshot_download
+        root = get_root_dir()
+        local_dir = root / "models" / model_id.split('/')[-1]
+        local_dir.mkdir(parents=True, exist_ok=True)
+        snapshot_download(
+            repo_id=model_id,
+            local_dir=str(local_dir),
+            local_dir_use_symlinks=False,
+            cache_dir=str(root / ".hf_cache"),
+            ignore_patterns=["*.md", "*.txt", "*.py"],
+        )
+        return str(local_dir)
+    except Exception as e:
+        print(f"  ⚠ 自动下载失败：{e}")
+        return None
+
+
 def load_embedding_model(spec: Optional[str]):
     """
     根据配置加载 sentence-transformers 嵌入模型（懒加载，自动选择 GPU/CPU）。
+
+    加载顺序：
+    1. 本地路径直接加载（local_files_only=True，离线可用）
+    2. HF 模型 ID → 先自动下载到项目根 models/<basename>/ 再本地加载
+    3. 下载失败 → 兜底走 sentence-transformers 默认缓存（~/.cache/huggingface）
 
     Args:
         spec: 本地模型目录 或 HF 模型 ID（见 resolve_embedding_model）
@@ -181,24 +232,99 @@ def load_embedding_model(spec: Optional[str]):
         return None, "cpu"
     kind, target = resolved
     device = get_compute_device()
+
+    model = None
     try:
         from sentence_transformers import SentenceTransformer
         if kind == 'local':
             print(f"✓ 加载本地嵌入模型: {target}  [设备: {device}]")
             model = SentenceTransformer(target, local_files_only=True, device=device)
         else:
-            print(
-                f"⏳ 首次使用将下载嵌入模型 {target} "
-                f"（之后自动缓存到 ~/.cache/huggingface）"
-            )
-            model = SentenceTransformer(target, device=device)
-        model.max_seq_length = 512
-        return model, device
+            # kind == 'hub'：先自动下载到项目根 models/<basename>/
+            print(f"⏳ 首次使用将下载嵌入模型 {target}")
+            print(f"   → 保存到项目根 models/{model_id_to_dirname(target)}/ 目录")
+            local_dir = _try_download_to_local_models(target)
+            if local_dir and os.path.isdir(local_dir):
+                print(f"✓ 已下载到本地，加载中: {local_dir}  [设备: {device}]")
+                model = SentenceTransformer(local_dir, local_files_only=True, device=device)
+            else:
+                # 兜底：HF 默认缓存
+                print(f"⏳ 本地下载失败，尝试 HF 默认缓存: {target}")
+                model = SentenceTransformer(target, device=device)
     except ImportError:
         print("⚠ 未安装 sentence_transformers，将使用关键词检索模式")
+        return None, "cpu"
     except Exception as e:
         print(f"⚠ 加载嵌入模型失败: {e}（将使用关键词检索模式）")
+        return None, "cpu"
+
+    if model is not None:
+        model.max_seq_length = 512
+        return model, device
     return None, "cpu"
+
+
+def load_reranker_model(spec: Optional[str]):
+    """
+    根据配置加载 sentence-transformers CrossEncoder 重排模型（懒加载，自动选择 GPU/CPU）。
+
+    加载顺序与嵌入模型一致：
+    1. 本地路径直接加载（local_files_only=True，离线可用）
+    2. HF 模型 ID → 先自动下载到项目根 models/<basename>/ 再本地加载
+    3. 下载失败 → 兜底走 HF 默认缓存
+
+    适用于 BAAI/bge-reranker-base / BAAI/bge-reranker-v2-m3 等 CrossEncoder 类模型。
+
+    Args:
+        spec: 本地模型目录 或 HF 模型 ID（见 resolve_embedding_model）
+
+    Returns:
+        (CrossEncoder 实例, 设备字符串) 或 (None, "cpu")（失败时）
+    """
+    resolved = resolve_embedding_model(spec)
+    if resolved is None:
+        return None, "cpu"
+    kind, target = resolved
+    device = get_compute_device()
+
+    model = None
+    try:
+        from sentence_transformers import CrossEncoder
+        if kind == 'local':
+            print(f"✓ 加载本地重排模型: {target}  [设备: {device}]")
+            model = CrossEncoder(target, max_length=512, device=device)
+        else:
+            # hub：先下载到项目根 models/<basename>/
+            print(f"⏳ 首次使用将下载重排模型 {target}")
+            local_dir = _try_download_to_local_models(target)
+            if local_dir and os.path.isdir(local_dir):
+                print(f"✓ 已下载到本地，加载中: {local_dir}  [设备: {device}]")
+                model = CrossEncoder(local_dir, max_length=512, device=device)
+            else:
+                # 兑底：HF 默认缓存
+                print(f"⏳ 本地下载失败，尝试 HF 默认缓存: {target}")
+                model = CrossEncoder(target, max_length=512, device=device)
+    except ImportError:
+        print("⚠ 未安装 sentence_transformers，重排不可用")
+        return None, "cpu"
+    except Exception as e:
+        print(f"⚠ 加载重排模型失败: {e}")
+        return None, "cpu"
+
+    if model is not None:
+        return model, str(model.device)
+    return None, "cpu"
+
+    try:
+        model.max_seq_length = 512
+    except Exception:
+        pass
+    return model, device
+
+
+def model_id_to_dirname(model_id: str) -> str:
+    """HF 模型 ID → 本地目录名（org/name → name）"""
+    return model_id.split('/')[-1] if '/' in model_id else model_id
 
 
 # ===================== 文本处理 =====================

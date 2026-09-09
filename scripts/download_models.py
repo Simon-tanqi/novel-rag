@@ -195,10 +195,12 @@ def main():
         ok = download_model(m["id"], local_abs, desc=m["description"], size_mb=m["size_mb"])
         if ok:
             ok_count += 1
+            # 存相对路径（可移植：项目移动目录后仍有效）
+            local_rel = f"models/{m['local_dir']}"
             if m["type"] == "embedding" and chosen_embedding is None:
-                chosen_embedding = str(local_abs)
+                chosen_embedding = local_rel
             elif m["type"] == "reranker":
-                chosen_reranker = str(local_abs)
+                chosen_reranker = local_rel
 
     print(f"\n{'='*60}")
     if ok_count == len(models):
@@ -208,8 +210,8 @@ def main():
         print(f"    1. 重启 GUI（main.py）即可使用本地模型")
         print(f"    2. 向量化时默认使用 bge-small（CPU/GPU 自动）")
         print(f"    3. 若有 GPU，安装 torch CUDA 版以加速：")
-        print(f"       pip install torch --index-url https://download.pytorch.org/whl/cu124")
-        print(f"       （已有 torch CPU 版需先卸载：pip uninstall torch）")
+        print(f"       pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu128")
+        print(f"       （RTX 50 系列必须 cu128+；已有 torch CPU 版需先卸载：pip uninstall torch torchvision torchaudio）")
     else:
         print(f"  ⚠ 部分失败（{ok_count}/{len(models)}），请检查网络后重试")
         print(f"    重试命令：python scripts/download_models.py")

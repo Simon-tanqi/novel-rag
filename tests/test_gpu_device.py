@@ -71,9 +71,19 @@ class TestLoadEmbeddingModelReturnsTuple:
         utils._GPU_DEVICE = None
         utils._GPU_AVAILABLE = None
 
-        # 传入不存在的模型，强制失败
+        # mock 掉 _try_download_to_local_models，避免真实网络调用
+        def fake_download_failed(model_id):
+            return None
+        monkeypatch.setattr(utils, "_try_download_to_local_models", fake_download_failed)
+
+        # mock sentence_transformers.SentenceTransformer 抛异常，避免真实加载
+        import sentence_transformers as st
+        def fake_st_fail(*a, **kw):
+            raise RuntimeError("forced failure")
+        monkeypatch.setattr(st, "SentenceTransformer", fake_st_fail)
+
         result = utils.load_embedding_model("NONEXISTENT_MODEL_XYZ_12345")
-        # 返回值应为 (None, "cpu") 或 None（取决于具体失败路径）
+        # 返回值应为 (None, "cpu")
         assert result is None or (
             isinstance(result, tuple) and result[0] is None and result[1] == "cpu"
         ), f"Unexpected return: {result}"

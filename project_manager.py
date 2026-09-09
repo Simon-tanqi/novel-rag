@@ -95,11 +95,17 @@ class ProjectManager:
         return project
 
     def _load_config(self) -> Dict:
-        """加载配置文件"""
+        """加载配置文件（磁盘存相对路径，加载后转绝对路径）"""
         if self.config_file.exists():
             try:
                 with open(self.config_file, 'r', encoding='utf-8') as f:
-                    return json.load(f)
+                    cfg = json.load(f)
+                # 路径字段：相对 -> 绝对（项目移动目录后仍可正常使用）
+                for p in cfg.get("projects", []):
+                    for key in ("source_path", "cleaned_path", "vector_db_path"):
+                        if p.get(key):
+                            p[key] = to_absolute_path(p[key])
+                return cfg
             except (json.JSONDecodeError, IOError) as e:
                 print(f"加载项目配置失败: {e}")
                 return self._get_default_config()
@@ -113,10 +119,17 @@ class ProjectManager:
         }
 
     def save_config(self):
-        """保存配置文件"""
+        """保存配置文件（内存中绝对路径，写入磁盘前转相对路径）"""
         try:
+            # 深拷贝避免修改内存中的绝对路径
+            import copy
+            cfg_to_save = copy.deepcopy(self.config)
+            for p in cfg_to_save.get("projects", []):
+                for key in ("source_path", "cleaned_path", "vector_db_path"):
+                    if p.get(key):
+                        p[key] = to_relative_path(p[key])
             with open(self.config_file, 'w', encoding='utf-8') as f:
-                json.dump(self.config, f, ensure_ascii=False, indent=2)
+                json.dump(cfg_to_save, f, ensure_ascii=False, indent=2)
         except IOError as e:
             print(f"保存项目配置失败: {e}")
             raise
@@ -246,12 +259,25 @@ class ProjectManager:
         return True
 
     def get_current_project(self) -> Optional[Dict]:
-        """获取当前选中的项目"""
+        """获取当前选中的项目（fallback 优先选最近一个 ready 的项目）
+
+        优先级：
+        1. current_project_id 指向的项目为 ready → 返回它
+        2. current_project_id 指向的项目不存在 / 不是 ready → fallback 到最近 ready
+        3. 没 current_project_id → fallback 到最近 ready
+        4. 都没有 ready 项目 → 兜底返回最后一个项目
+        """
         current_id = self.config.get("current_project_id")
         if current_id:
-            return self.get_project(current_id)
-        # 如果没有当前项目，返回最后一个项目（如果存在）
+            p = self.get_project(current_id)
+            if p and p.get("status") == "ready":
+                return p
+        # Fallback: 最近一个 ready 项目
         projects = self.config.get("projects", [])
+        ready_projects = [p for p in projects if p.get("status") == "ready"]
+        if ready_projects:
+            return ready_projects[-1]
+        # 最后兑底
         if projects:
             return projects[-1]
         return None
@@ -321,6 +347,79 @@ class ProjectManager:
         else:
             return "error"
 
+    def get_project_runtime(self, project_id: str) -> Dict:
+        """获取项目运行时信息（所见即所得的真相来源）
+
+        返回字段：
+        - status: 同 get_project_status
+        - vector_db_path: 实际向量库路径
+        - is_external: vector_db_path 不在项目标准 data/<name>/ 下
+        - chunk_count: metadata.json 实际段数（0 表示不可读）
+        - has_embeddings: embeddings.npy 存在
+        - has_metadata: metadata.json 存在
+        - embeddings_size_mb: embeddings.npy 大小（MB）
+        - source_size_mb: 原文件大小（MB）
+        - error: 异常信息
+        """
+        project = self.get_project(project_id)
+        if not project:
+            return {"status": "unknown", "error": "项目不存在"}
+
+        vector_db_path = project.get("vector_db_path", "")
+        source_path = project.get("source_path", "")
+        result = {
+            "status": self.get_project_status(project_id),
+            "vector_db_path": vector_db_path,
+            "is_external": False,
+            "chunk_count": 0,
+            "has_embeddings": False,
+            "has_metadata": False,
+            "embeddings_size_mb": 0.0,
+            "source_size_mb": 0.0,
+        }
+
+        # 判断 vector_db_path 是否在项目标准 data/<name>/ 下
+        if vector_db_path:
+            project_data_dir = str(get_data_dir() / project.get("name", ""))
+            try:
+                rel = os.path.relpath(vector_db_path, project_data_dir)
+                result["is_external"] = rel.startswith("..") or os.path.isabs(rel)
+            except (ValueError, OSError):
+                result["is_external"] = True
+
+        # 查文件
+        vector_file = project.get("vector_file", "")
+        metadata_file = project.get("metadata_file", "")
+        if not vector_file:
+            vector_file = "embeddings.npy"
+        if not metadata_file:
+            metadata_file = "metadata.json"
+        npy_path = os.path.join(vector_db_path, vector_file) if vector_db_path else ""
+        meta_path = os.path.join(vector_db_path, metadata_file) if vector_db_path else ""
+
+        try:
+            if npy_path and os.path.isfile(npy_path):
+                result["has_embeddings"] = True
+                result["embeddings_size_mb"] = round(os.path.getsize(npy_path) / 1024 / 1024, 1)
+            if meta_path and os.path.isfile(meta_path):
+                result["has_metadata"] = True
+                # 读 metadata 拿段数（仅 0 段/小文件快，大文件不读全）
+                import json
+                try:
+                    with open(meta_path, 'r', encoding='utf-8') as f:
+                        meta = json.load(f)
+                    if isinstance(meta, list):
+                        result["chunk_count"] = len(meta)
+                except (json.JSONDecodeError, OSError):
+                    pass
+        except OSError as e:
+            result["error"] = str(e)
+
+        if source_path and os.path.isfile(source_path):
+            result["source_size_mb"] = round(os.path.getsize(source_path) / 1024 / 1024, 1)
+
+        return result
+
     def is_keyword_only(self, project_id: str) -> bool:
         """检查项目是否处于纯关键词检索模式（metadata 在但 embeddings.npy 缺失）"""
         return self.get_project_status(project_id) == "keyword_only"
@@ -352,14 +451,34 @@ class ProjectManager:
             print(f"错误: 目录中未找到.npy文件: {vector_db_path}")
             return None
 
-        # 查找匹配的json文件
+        # 查找匹配的json文件（兼容多种命名习惯：同名的 <stem>.json、
+        # 项目标准 metadata.json、以及常见别名）
         vector_file = None
         metadata_file = None
+
+        def _candidate_jsons_for(npy):
+            stem = os.path.splitext(npy)[0]
+            candidates = [
+                npy.replace('.npy', '.json'),  # embeddings.npy -> embeddings.json
+                'metadata.json',                # 项目标准
+                'embeddings.json',              # 别名
+                f'{stem}.meta.json',            # embeddings.meta.json
+            ]
+            seen = set()
+            result = []
+            for cand in candidates:
+                if cand not in seen:
+                    seen.add(cand)
+                    result.append(cand)
+            return result
+
         for npy_file in npy_files:
-            json_file = npy_file.replace('.npy', '.json')
-            if os.path.exists(os.path.join(vector_db_path, json_file)):
-                vector_file = npy_file
-                metadata_file = json_file
+            for json_file in _candidate_jsons_for(npy_file):
+                if os.path.exists(os.path.join(vector_db_path, json_file)):
+                    vector_file = npy_file
+                    metadata_file = json_file
+                    break
+            if vector_file:
                 break
 
         if not vector_file:

@@ -21,7 +21,7 @@ import time
 import numpy as np
 from typing import List, Dict, Optional
 
-from utils import load_embedding_model
+from utils import load_embedding_model, load_reranker_model
 from novel_context import chapter_aggregate_rerank
 
 
@@ -49,9 +49,11 @@ class RAGRetriever:
         self.reranker_model = None
         self.embedding_model = None
         self._embedding_loaded = False
+        self._reranker_loaded = False
 
         self.load_documents()
         self._load_embedding_model()
+        self._load_reranker()
 
     @classmethod
     def get_or_create(
@@ -93,6 +95,19 @@ class RAGRetriever:
             print("⚠ 未配置嵌入模型，将使用关键词检索模式")
             self.embedding_model = None
             device = "cpu"
+
+    def _load_reranker(self):
+        """加载重排模型（CrossEncoder，仅在 reranker_model_path 配置时加载）"""
+        if self._reranker_loaded:
+            return
+        self._reranker_loaded = True
+        if not self.reranker_model_path:
+            return
+        self.reranker_model, device = load_reranker_model(self.reranker_model_path)
+        if self.reranker_model is not None:
+            print(f"✓ 重排模型已加载: {self.reranker_model_path}  [设备: {device}]")
+        else:
+            print(f"⚠ 重排模型不可用: {self.reranker_model_path}，将跳过精排")
 
     # ===================== 数据加载 =====================
 
@@ -376,12 +391,23 @@ class RAGRetriever:
         enable_rerank: bool = False
     ) -> List[Dict]:
         """
-        检索相关文档
+        检索相关文档（混合召回 + 可选精排）
+
+        阶段1: 混合召回
+            - 向量召远 (top_k*5)
+            - 关键词召远 (top_k*5)
+            - RRF 融合（k=60）→ 取 top_k*3
+        阶段2: 精排（仅在 enable_rerank=True 且 reranker_model 已加载时）
+            - CrossEncoder 重排所有候选
+            - 按 rerank score 降序排
+        阶段3: 章节聚合重排
+            - 同章去重、取每章最高分
+            - 截断 top_k
 
         Args:
             question: 查询问题
             top_k: 返回的 top K 结果数
-            enable_rerank: 是否启用重排序（预留，未实现）
+            enable_rerank: 是否启用 CrossEncoder 精排
 
         Returns:
             相关文档列表，每项包含 {text, score, chapter, chunk_id, file}
@@ -391,20 +417,106 @@ class RAGRetriever:
             return []
 
         start_time = time.time()
+        candidate_pool_size = top_k * 5  # 召远阶段取多一些
+        rerank_input_size = top_k * 3    # 精排阶段最多这么多 pair
 
-        # 宽松召回（向量 top_k*3 / 关键词 top_k*3）
-        if self.embedding_model is not None:
-            results = self._vector_retrieve(question, top_k * 3)
+        # ---------- 阶段1: 混合召远（RRF） ----------
+        vec_results: List[Dict] = []
+        if self.embedding_model is not None and isinstance(self.embeddings, np.ndarray) and self.embeddings.ndim == 2:
+            vec_results = self._vector_retrieve(question, candidate_pool_size)
+        kw_results: List[Dict] = self._keyword_retrieve(question, candidate_pool_size)
+
+        if vec_results and kw_results:
+            fused = self._rrf_fusion(vec_results, kw_results, k=60)
+            fusion_mode = "RRF（向量+关键词）"
+        elif vec_results:
+            fused = vec_results
+            fusion_mode = "仅向量"
         else:
-            results = self._keyword_retrieve(question, top_k * 3)
+            fused = kw_results
+            fusion_mode = "仅关键词"
 
+        # 截断到精排输入大小
+        candidates = fused[:rerank_input_size]
+
+        # ---------- 阶段2: CrossEncoder 精排 ----------
+        if enable_rerank and self.reranker_model is not None and candidates:
+            candidates = self._rerank(question, candidates)
+            rerank_mode = f"CrossEncoder 精排（{len(candidates)}→{top_k}）"
+        else:
+            rerank_mode = "未精排（使用召远/融合分数）"
+
+        # ---------- 阶段3: 章节聚合重排 + 截断 ----------
+        final_results = chapter_aggregate_rerank(candidates, top_k)
         retrieve_time = time.time() - start_time
-
-        # 章节聚合重排：同章去重、覆盖多章、按章内最高分排序
-        final_results = chapter_aggregate_rerank(results, top_k)
-        print(f"✓ 检索完成: {len(final_results)} 个结果，耗时 {retrieve_time:.3f}秒")
-
+        print(
+            f"✓ 检索完成: {fusion_mode} → {rerank_mode} → 章节聚合 → top{top_k}，"
+            f"耗时 {retrieve_time:.3f}秒"
+        )
         return final_results
+
+    def _rrf_fusion(
+        self,
+        vec_results: List[Dict],
+        kw_results: List[Dict],
+        k: int = 60
+    ) -> List[Dict]:
+        """
+        Reciprocal Rank Fusion（倒数排名融合）。
+
+        对每个召远器，文档 d 的 RRF 分数 = 1 / (k + rank(d))，
+        最终分数 = 各召远器 RRF 分数之和。常数 k=60 为论文推荐值。
+
+        同一文档可能被两个召远器都返回，按 chunk_id 去重合并。
+        """
+        scores: Dict[int, float] = {}
+        docs: Dict[int, Dict] = {}
+
+        for rank, doc in enumerate(vec_results):
+            cid = doc.get('chunk_id', id(doc))
+            scores[cid] = scores.get(cid, 0.0) + 1.0 / (k + rank + 1)
+            docs[cid] = doc
+
+        for rank, doc in enumerate(kw_results):
+            cid = doc.get('chunk_id', id(doc))
+            scores[cid] = scores.get(cid, 0.0) + 1.0 / (k + rank + 1)
+            if cid not in docs:
+                docs[cid] = doc
+
+        # 按 RRF 分数降序排
+        sorted_cids = sorted(scores.keys(), key=lambda x: -scores[x])
+        fused: List[Dict] = []
+        for cid in sorted_cids:
+            merged = dict(docs[cid])
+            merged['score'] = round(scores[cid], 6)  # 融合后统一为 RRF 分数
+            fused.append(merged)
+        return fused
+
+    def _rerank(self, question: str, results: List[Dict]) -> List[Dict]:
+        """用 CrossEncoder 重排候选文档。失败时返回原顺序。"""
+        if not results:
+            return results
+        pairs = [[question, r['text']] for r in results]
+        try:
+            scores = self.reranker_model.predict(
+                pairs,
+                convert_to_numpy=True,
+                show_progress_bar=False,
+            )
+        except TypeError:
+            # 某些版本不接 show_progress_bar
+            scores = self.reranker_model.predict(pairs, convert_to_numpy=True)
+        except Exception as e:
+            print(f"⚠ CrossEncoder 重排失败: {e}，返回召远原顺序")
+            return results
+
+        reranked: List[Dict] = []
+        for r, s in zip(results, scores):
+            doc = dict(r)
+            doc['score'] = round(float(s), 4)
+            reranked.append(doc)
+        reranked.sort(key=lambda x: -x['score'])
+        return reranked
 
     @staticmethod
     def _expand_cjk_keywords(tokens: set) -> set:

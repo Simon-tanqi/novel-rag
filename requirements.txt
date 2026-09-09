@@ -1,5 +1,20 @@
 # 小说RAG系统 - 依赖列表
-# Python >= 3.8
+# Python >= 3.10（推荐 3.11 / 3.13；torch 2.7+ 支持 Python 3.13）
+#
+# ===== 重要：先装 PyTorch，再装本文件 =====
+# PyTorch 不写在本文件中，因为 CPU/GPU 版安装命令不同。
+# 请根据你的环境选择以下其一执行，然后再运行 pip install -r requirements.txt：
+#
+# 【GPU 版（NVIDIA，推荐 RTX 30/40/50 系列）】
+#   pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu128
+#   注意：RTX 50 系列（Blackwell, sm_120）必须用 cu128 及以上，cu124/cu126 不支持。
+#
+# 【CPU 版（无 NVIDIA GPU 时）】
+#   pip install torch torchvision torchaudio
+#
+# 【国内网络加速】在上述命令前加镜像源，或设置环境变量：
+#   $env:HF_ENDPOINT="https://hf-mirror.com"   (PowerShell)
+#   export HF_ENDPOINT=https://hf-mirror.com   (Linux/Mac)
 
 # GUI框架
 customtkinter>=5.2.0
@@ -8,12 +23,11 @@ customtkinter>=5.2.0
 requests>=2.28.0
 
 # 数值计算
-numpy>=1.24.0
+numpy>=1.24.0,<3.0.0
 
-# 向量化核心（本地嵌入模型）
-# sentence-transformers 依赖 torch；CPU 环境建议先装 CPU 版 torch 再装本依赖，
-# 详见 README「安装依赖」说明。缺失时系统会自动降级为关键词检索。
-sentence-transformers>=2.2.0
+# 向量化核心（本地嵌入模型，依赖 torch）
+# sentence-transformers 会自动拉取 transformers / huggingface-hub 等传递依赖
+sentence-transformers>=3.0.0
 
 # 文件编码检测（清洗模块；缺失时自动降级为逐编码探测）
 chardet>=5.0.0

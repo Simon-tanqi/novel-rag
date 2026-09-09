@@ -21,7 +21,7 @@ OpenAI-compatible LLM backend. Supports both .txt and .epub input. No cloud depe
 - 📖 **多格式支持**：`.txt` 和 `.epub` 一键导入；epub 自动提取章节文本并转为纯文本走清洗管线，支持导入已有向量库（.npy + .json）
 - 🧹 **可插拔文本清洗**：6 种规则（去除广告水印、页码、拼音残留、修复 GBK 编码错字等），支持自定义脏词
 - 📝 **句子级智能切片**：以句子为单位 + 重叠窗口滑动切分，避免切断语义
-- 🔍 **双通道检索**：本地向量语义检索（默认内置 `bge-small-zh-v1.5`，首次自动下载）；未配置嵌入模型时自动回退为关键词检索，功能不瘫痪
+- 🔍 **混合召回 + 精排**：向量语义召回 + 关键词召回经 RRF（倒数排名融合）合并，可选 CrossEncoder 重排进一步提升精度；未配置嵌入模型时自动回退纯关键词检索，功能不瘫痪
 - 💬 **多轮对话**：手动拼接最近上下文 + 轮数上限，防止上下文膨胀与接口超时
 - ⚙️ **Prompt 模板外置**：可编辑系统提示，强制模型「仅依据原文、禁止编造」
 - 🛡️ **密钥安全**：API Key 不写死在仓库 —— 支持环境变量 `DEEPSEEK_API_KEY` 兜底
@@ -32,14 +32,21 @@ OpenAI-compatible LLM backend. Supports both .txt and .epub input. No cloud depe
 ```mermaid
 flowchart LR
     A["小说原文<br/>.txt / .epub"] --> B["step1_clean<br/>文本清洗"]
-    B --> C["step2_split_embed<br/>切片 + 向量化"]
+    B --> C["step2_split_embed<br/>切片 + 指代消解增强 + 向量化"]
     C --> D[("本地向量库<br/>embeddings.npy + metadata.json")]
-    Q["用户问题"] --> E["RAGRetriever<br/>语义/关键词检索"]
-    D --> E
-    E --> F["Top-K 命中片段<br/>+ 多轮对话历史"]
-    F --> G["Prompt 模板组装<br/>(原文片段 + 问题 + 历史)"]
-    G --> H["LLM API<br/>OpenAI 兼容"]
-    H --> I["忠实回答<br/>+ 来源片段引用"]
+    Q["用户问题"] --> E1["向量召回<br/>top_k×5"]
+    Q --> E2["关键词召回<br/>top_k×5"]
+    D --> E1
+    E1 --> F["RRF 融合<br/>(倒数排名融合 k=60)"]
+    E2 --> F
+    F --> G{"CrossEncoder<br/>精排? (可选)"}
+    G -->|是| H["重排序<br/>bge-reranker-base"]
+    G -->|否| I["章节聚合去重"]
+    H --> I
+    I --> J["Top-K 命中片段<br/>+ 多轮对话历史"]
+    J --> K["Prompt 模板组装<br/>(原文片段 + 问题 + 历史)"]
+    K --> L["LLM API<br/>OpenAI 兼容"]
+    L --> M["忠实回答<br/>+ 来源片段引用"]
 ```
 
 ## 🧰 技术栈
@@ -50,7 +57,8 @@ flowchart LR
 | 文本清洗 | 正则 + 中文网文脏数据映射表（GBK 错字、水印广告、拼音残留） |
 | 切片策略 | 句子滑动窗口 + 重叠（`split_text_by_sentences`） |
 | 嵌入模型 | sentence-transformers（本地推理，可选；支持 HF 模型名自动下载） |
-| 向量检索 | numpy 余弦相似度（无重依赖、跨平台） |
+| 混合召回 | numpy 余弦相似度 + 关键词匹配 + RRF 融合（无重依赖、跨平台） |
+| 精排 | sentence-transformers CrossEncoder（bge-reranker-base，可选，GPU 加速） |
 | 生成模型 | OpenAI 兼容 API（默认 DeepSeek） |
 | 命令行 | argparse（ingest / ask / chat / list / demo） |
 | 配置 | JSON + 环境变量 |
@@ -76,6 +84,14 @@ flowchart LR
    - *章节聚合重排*：宽松召回后按章节聚合（每章保留最高分）再排序截断，避免 top_k
      结果集中在一章内、漏掉语义相关的其他章节（多样性）。
    两者均零额外依赖、纯规则启发式，重排前 `top_k × 3` 召回为聚合留出余量。
+7. **混合召回（RRF）优于单路向量检索**：中文小说中，专有名词（人名、功法、地名）
+   的精确匹配靠关键词更可靠，而语义近似靠向量更可靠。两路各取 `top_k×5`，
+   用 Reciprocal Rank Fusion（k=60）合并排名分数，既保留语义泛化又保证精确命中，
+   比纯向量检索在"主角名/功法名"类问题上召回率显著提升。
+8. **CrossEncoder 精排作为可选增强**：混合召回取 `top_k×3` 候选后，
+   可用 `bge-reranker-base` 做 query-document 对打分重排，解决"向量相似度高但
+   实际不相关"的假阳性问题。GPU 上单条精排毫秒级，可通过 config 或 `--rerank`
+   开关控制，未配置重排模型时自动跳过，不影响基础检索。
 
 ## 📁 目录结构
 
@@ -87,7 +103,7 @@ novel-rag/
 ├── project_manager.py      # 项目配置与 CRUD
 ├── settings_window.py      # 系统设置窗口
 ├── config_manager.py       # 全局配置（含环境变量 API Key 兜底）
-├── rag_retriever.py        # RAG 检索核心（向量 / 关键词双通道 + 章节聚合重排）
+├── rag_retriever.py        # RAG 检索核心（RRF 混合召回 + CrossEncoder 精排 + 章节聚合）
 ├── novel_context.py        # 小说检索增强：指代消解前缀注入 + 章节聚合重排
 ├── step1_clean.py          # 文本清洗模块
 ├── step2_split_embed.py    # 切片与向量化模块（自动 GPU/CPU 推理）
@@ -110,6 +126,27 @@ novel-rag/
 > **例外**：`data/demo/`（内置原创示例小说的向量库）已通过 `.gitignore` 白名单放行，随仓库发布，
 > 确保 clone 后开箱即用。
 
+## ⚡ 面试官一键运行验证
+
+```bash
+# 1. 装环境（Windows 双击 setup_env.bat，或手动执行）
+pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu128
+pip install -r requirements.txt
+
+# 2. 设 API Key（任意 OpenAI 兼容接口，如 DeepSeek）
+$env:DEEPSEEK_API_KEY="sk-xxxx"          # PowerShell
+# export DEEPSEEK_API_KEY=sk-xxxx        # Linux/Mac
+
+# 3. 跑通全流程（原创示例小说，无版权风险，自动下载嵌入模型约 95MB）
+python novel_rag.py demo
+
+# 4. 验证问答（不需要 API Key 也能验证检索链路）
+python novel_rag.py ask --name demo "沈青的师父是谁？"
+```
+
+> 国内网络：首次下载模型前设置 `$env:HF_ENDPOINT="https://hf-mirror.com"` 加速。
+> 完全离线：先运行 `python scripts/download_models.py --embedding-small` 下载模型到本地。
+
 ## 🚀 快速开始
 
 > 💡 **0 分钟体验（推荐第一次）** —— 没有小说语料也想看效果：
@@ -127,7 +164,7 @@ novel-rag/
 > 💡 **5 分钟用你自己的小说跑通（推荐 CLI）** —— 只需要**一本小说的 .txt + 一个 API Key**：
 
 ```bash
-# 1. 安装依赖（CPU 环境建议先装 CPU 版 torch，见下文「环境要求」）
+# 1. 安装依赖（Windows 用户可直接运行一键脚本：setup_env.bat，自动装 GPU 版 torch + 全部依赖）
 pip install -r requirements.txt
 
 # 2. 提供 API Key（推荐环境变量，密钥不落盘；Windows PowerShell 用 $env:DEEPSEEK_API_KEY=...）
@@ -151,14 +188,15 @@ python main.py
 
 ### 1. 环境要求
 
-- Python 3.8+
+- Python 3.10+（推荐 3.11 / 3.13）
 - pip
 - **GPU 加速（可选，推荐有 NVIDIA 显卡的用户）**：
   RTX 3060 及以上显卡安装 CUDA 版 torch 后向量化自动使用 GPU（batch_size 从 32 → 256，速度提升 10~20×）：
   ```bash
-  # 已有 CPU 版 torch 时先卸载，再装 CUDA 版（RTX 30/40/50 系列用 cu124）
-  pip uninstall torch -y
-  pip install torch --index-url https://download.pytorch.org/whl/cu124
+  # 已有 CPU 版 torch 时先卸载，再装 CUDA 版（RTX 30/40/50 系列用 cu128）
+  pip uninstall torch torchvision torchaudio -y
+  pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu128
+  # 注意：RTX 50 系列（Blackwell, sm_120）必须 cu128+，cu124/cu126 不支持
   ```
   无 GPU 或未装 CUDA 版 torch 时自动回退 CPU，不影响功能。
 
@@ -197,19 +235,19 @@ python novel_rag.py ask --name 盘龙 "你的问题" --api-key sk-xxxxxxxx
 
 > 优先级：系统环境变量 > .env > config.json > 命令行参数；程序启动时会自动加载项目根目录的 .env。
 
-**嵌入模型（语义检索用，可选）：**
+**嵌入模型（语义检索用，自动下载）：**
 
-- 默认 `BAAI/bge-small-zh-v1.5`：无需任何配置，首次向量化时自动从 HuggingFace 下载并缓存（约 95MB，自动选择 GPU/CPU）
-- 本地模型目录（推荐有 VPN/网速好的用户，clone 后下载一次，**无需每次重新下载**）：
+- 默认 `BAAI/bge-small-zh-v1.5`：首次向量化时自动从 HuggingFace 下载并缓存（约 95MB，自动选择 GPU/CPU），无需手动配置
+- **无网络 / 国内网络不稳定**：运行下载脚本（内置 hf-mirror 国内镜像）：
   ```bash
-  python scripts/download_models.py          # 下载全套模型到 models/（约 680MB）
-  # 或只下载轻量嵌入（推荐，先跑通）：
-  python scripts/download_models.py --embedding-small
+  python scripts/download_models.py --embedding-small   # 仅下载 bge-small（推荐，先跑通）
+  python scripts/download_models.py                     # 下载全套模型（含 bge-base / reranker）
   ```
-  下载后 `config.json` 中 `embedding_model_path` 自动写为 `models/bge-small-zh-v1.5`（本地路径，优先读取）
-- 国内用户建议设环境变量加速：`set HF_ENDPOINT=https://hf-mirror.com`
-- 想纯关键词模式（完全离线）：把 `embedding_model_path` 置空即可
-- 重排模型路径（可选，开发中）：预留 CrossEncoder 接入位
+  下载后 `config.json` 中 `embedding_model_path` 自动写为 `models/bge-small-zh-v1.5`（本地路径，优先读取，完全离线）
+- 国内用户建议设环境变量加速自动下载：`$env:HF_ENDPOINT="https://hf-mirror.com"` (PowerShell)
+- **手动放置**：也可自行将模型文件夹放到 `models/bge-small-zh-v1.5/`，然后在 `config.json` 中填相对路径
+- 想纯关键词模式（完全离线，无需模型）：把 `embedding_model_path` 置空即可
+- **重排模型（可选，推荐开启）**：`BAAI/bge-reranker-base`（约 220MB），开启后对混合召回候选做 CrossEncoder 精排，显著提升排序质量。下载：`python scripts/download_models.py --reranker`，然后在 config.json 中设置 `"enable_rerank": true`
 
 ### 4. 启动
 
@@ -249,7 +287,7 @@ python -m pytest tests/ -v
 API 客户端重试与响应解析、demo 自动注册与 cmd_demo 分支、cmd_ingest 同路径跳过、
 epub 格式加载与 HTML 标签剥离。
 
-81 项测试全过，1 秒内完成。
+120+ 项测试全过（含混合召回 RRF、CrossEncoder 精排、降级路径等），核心用例秒级完成。
 
 ## 效果评估思路
 
@@ -272,9 +310,9 @@ epub 格式加载与 HTML 标签剥离。
 - [x] 切片阶段保留真实章节标题，回答精确到「第 X 章」
 - [x] 指代消解前缀注入 + 章节聚合重排（novel_context.py，见「关键设计决策」）
 - [x] 内置 demo 向量库（随仓库预置，clone 后首跑自动注册；`--force` 可重建为真实语义向量）
-- [ ] 接入 CrossEncoder 重排（配置项已预留）
+- [x] CrossEncoder 重排（bge-reranker-base，CLI/GUI 双入口支持，`--rerank` / `--no-rerank` 命令行开关）
 - [ ] HTTP 服务接口，便于远程脚本化评估
-- [ ] 混合检索（BM25 + 向量）
+- [x] 混合召回（向量 + 关键词 RRF 融合，中文 bigram 扩展）
 
 ## 📄 License
 
