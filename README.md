@@ -115,7 +115,7 @@ novel-rag/
 ├── scripts/
 │   ├── rebuild_embeddings.py   # 一键补 embeddings.npy（向量库损坏时用）
 │   └── download_models.py      # 下载模型到本地 models/（首次 clone 后运行一次）
-├── tests/                  # 单元测试（83 项，pytest 全通过）
+├── tests/                  # 单元测试（126 项，pytest 全通过）
 ├── config.example.json     # 配置模板（复制为 config.json 后填写）
 ├── requirements.txt
 └── README.md
@@ -126,7 +126,7 @@ novel-rag/
 > **例外**：`data/demo/`（内置原创示例小说的向量库）已通过 `.gitignore` 白名单放行，随仓库发布，
 > 确保 clone 后开箱即用。
 
-## ⚡ 面试官一键运行验证
+## ⚡ 一键运行验证
 
 ```bash
 # 1. 装环境（Windows 双击 setup_env.bat，或手动执行）
@@ -287,19 +287,20 @@ python -m pytest tests/ -v
 API 客户端重试与响应解析、demo 自动注册与 cmd_demo 分支、cmd_ingest 同路径跳过、
 epub 格式加载与 HTML 标签剥离。
 
-120+ 项测试全过（含混合召回 RRF、CrossEncoder 精排、降级路径等），核心用例秒级完成。
+126 项测试全过（含混合召回 RRF、CrossEncoder 精排、降级路径等），核心用例秒级完成。
 
 ## 效果评估思路
 
 - 内置可执行评估脚本 eval_retrieval.py（无需 API Key、无需联网）：
-  `ash
+  ```bash
   # 对 demo 项目跑 12 道「问题-预期章节」QA，量化召回：
   python eval_retrieval.py --name demo --top-k 3
   # 输出示例：QA 总数: 12 / Recall@3 = 12/12 = 100.0%
-  `
+  ```
 - 命中判定按「同章」（章节名前缀匹配），输出逐题命中章节明细，可 --json-out 导出；
 - 自建语料时，把 QA 集写成 JSON（question + 预期命中章节）即可换库复跑；
 - 对生成答案做**忠实度人工抽检**：答案关键事实是否能在命中片段中找到依据、有无编造。
+
 ## 🗺️ Roadmap
 
 - [x] 多项目管理 + 向量库导入
