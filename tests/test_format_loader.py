@@ -9,6 +9,12 @@ import tempfile
 
 import pytest
 
+try:  # 可选依赖：未安装时仅跳过 epub 相关用例
+    import ebooklib  # noqa: F401
+    _HAS_EBOOKLIB = True
+except ImportError:
+    _HAS_EBOOKLIB = False
+
 from format_loader import (
     SUPPORTED_EXTENSIONS,
     is_supported_format,
@@ -92,6 +98,7 @@ def _make_test_epub(path):
 
 
 class TestLoadEpub:
+    @pytest.mark.skipif(not _HAS_EBOOKLIB, reason="可选依赖 ebooklib 未安装")
     def test_epub_extract_text(self, tmp_path):
         epub_path = str(tmp_path / "test.epub")
         _make_test_epub(epub_path)
@@ -105,6 +112,7 @@ class TestLoadEpub:
         assert "灰衣老者" in text
         assert "心要静" in text
 
+    @pytest.mark.skipif(not _HAS_EBOOKLIB, reason="可选依赖 ebooklib 未安装")
     def test_epub_strips_html_tags(self, tmp_path):
         epub_path = str(tmp_path / "test.epub")
         _make_test_epub(epub_path)
@@ -115,6 +123,7 @@ class TestLoadEpub:
         assert "<p>" not in text
         assert "<h1>" not in text
 
+    @pytest.mark.skipif(not _HAS_EBOOKLIB, reason="可选依赖 ebooklib 未安装")
     def test_epub_chapter_separation(self, tmp_path):
         epub_path = str(tmp_path / "test.epub")
         _make_test_epub(epub_path)
