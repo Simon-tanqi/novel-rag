@@ -535,8 +535,20 @@ def _chunk_by_sentences(
     """（旧私有入口，兼容保留）转调 split_text_by_sentences。
 
     max_chunk_length 已废弃：无标点超长段落由规格硬上限 max_chars 兜底。
+
+    在旧有「一级边界（。！：？）→ 四级硬切」之上补齐降级链：
+    仍超 max_chars 的单片依次尝试二级边界（；：，、）→ 三级边界（空白/换行）
+    → 四级硬切，避免超长无句末标点的段落整段塞进向量库。
+    签名保持不变；切片口径仅在「单片超限」这一支路上被细化。
     """
-    return split_text_by_sentences(text, min_chars, max_chars, overlap_sentences)
+    chunks = split_text_by_sentences(text, min_chars, max_chars, overlap_sentences)
+    out: List[str] = []
+    for chunk in chunks:
+        if len(chunk) > max_chars:
+            out.extend(BoundaryDetector.split_oversized(chunk, max_chars, min_scan=min_chars))
+        else:
+            out.append(chunk)
+    return out
 
 
 def split_text_by_chapters(
@@ -629,3 +641,242 @@ def format_timestamp(dt: Optional[datetime] = None) -> str:
     if dt is None:
         dt = datetime.now()
     return dt.strftime("%Y-%m-%d %H:%M:%S")
+
+
+# ===================== 分层切片：边界探测 + 父块构造 =====================
+# 目标：把「切片粒度 = 召回粒度」解耦为「子块检索 + 父块召回 + 邻居扩展」。
+# 本段全部为新增（新增常量 / 类 / 函数），不改动上方任何既有函数的签名与行为：
+# 子块仍由 split_text_recursive / split_text_by_chapters 产出，
+# 新增的只是「父块聚合」与「边界降级探测」这两层能力。
+
+TARGET_CHUNK_CHARS = 400   # 子块目标长度（字符）
+OVERLAP_MIN_CHARS = 50     # 子块重叠下限（字符）
+OVERLAP_RATIO = 0.15       # 子块重叠比例（前块长度的 15%）
+PARENT_MIN_CHARS = 800     # 父块长度下限（字符）
+PARENT_MAX_CHARS = 1500    # 父块长度上限（字符）
+PARENT_GROUP_MIN = 2       # 父块最少聚合子块数
+PARENT_GROUP_MAX = 4       # 父块最多聚合子块数
+
+
+class BoundaryDetector:
+    """文段边界探测器（四级降级策略）。
+
+    一级边界：句末标点 。！？!?… 及其后紧随的闭合引号 ”"』」
+    二级边界：从句标点 ；;：:，,、
+    三级边界：空白字符（\\s、\\n）
+    四级边界：以上均无命中时按 max_chars 硬切（由调用方兜底）
+
+    find_* 系列统一返回「切分点下标」（即边界之后的位置），无命中返回 -1。
+    """
+
+    PRIMARY_PUNCT = ("。", "！", "？", "!", "?", "…")
+    CLOSING_QUOTES = ("”", '"', "』", "」")
+    SECONDARY_PUNCT = ("；", ";", "：", ":", "，", ",", "、")
+
+    @classmethod
+    def find_primary(cls, text: str, start: int = 0) -> int:
+        """一级边界：第一个句末标点（连同其后闭合引号）之后的切分点；无命中返回 -1。"""
+        if not text:
+            return -1
+        for i in range(max(0, start), len(text)):
+            if text[i] in cls.PRIMARY_PUNCT:
+                cut = i + 1
+                while cut < len(text) and text[cut] in cls.CLOSING_QUOTES:
+                    cut += 1
+                return cut
+        return -1
+
+    @classmethod
+    def find_secondary(cls, text: str, start: int = 0) -> int:
+        """二级边界：第一个从句标点之后的切分点；无命中返回 -1。"""
+        if not text:
+            return -1
+        for i in range(max(0, start), len(text)):
+            if text[i] in cls.SECONDARY_PUNCT:
+                return i + 1
+        return -1
+
+    @classmethod
+    def find_tertiary(cls, text: str, start: int = 0) -> int:
+        """三级边界：第一段空白（含换行）之后的切分点；无命中返回 -1。"""
+        if not text:
+            return -1
+        begin = max(0, start)
+        m = re.search(r'\s', text[begin:])
+        if not m:
+            return -1
+        cut = begin + m.end()
+        while cut < len(text) and text[cut].isspace():
+            cut += 1
+        return cut
+
+    @classmethod
+    def split_oversized(cls, text: str, max_chars: int, min_scan: int = 1) -> List[str]:
+        """超长文本降级切分：二级 → 三级 → 四级（硬切）。
+
+        仅在单段/单句长度超过 max_chars 时使用；切分只做位置裁剪、
+        不改写任何字符，因此每片仍是原文的连续片段。
+
+        Args:
+            text: 待切分文本
+            max_chars: 单片硬上限（字符）
+            min_scan: 扫描起点相对片首的最小偏移（避免切出过碎的前片）
+
+        Returns:
+            文本片列表（按原文顺序、无重复、无空隙）
+        """
+        if not text:
+            return []
+        max_chars = max(1, int(max_chars))
+        min_scan = max(1, min(int(min_scan), max_chars))
+        if len(text) <= max_chars:
+            return [text]
+
+        pieces: List[str] = []
+        start = 0
+        n = len(text)
+        while start < n:
+            if n - start <= max_chars:
+                tail = text[start:]
+                if tail.strip():
+                    pieces.append(tail)
+                break
+
+            window_end = start + max_chars
+            scan_from = min(start + min_scan, window_end - 1)
+            cut = BoundaryDetector.find_secondary(text, scan_from)
+            if cut < 0 or cut > window_end:
+                cut = BoundaryDetector.find_tertiary(text, scan_from)
+            if cut < 0 or cut > window_end:
+                cut = window_end  # 四级：无任何可切点 → 硬切
+            if cut <= start:
+                cut = window_end
+
+            piece = text[start:cut]
+            if piece.strip():
+                pieces.append(piece)
+            start = cut
+        return pieces
+
+
+def compute_overlap_chars(
+    prev_chunk_len: int,
+    overlap_min: int = OVERLAP_MIN_CHARS,
+    overlap_ratio: float = OVERLAP_RATIO
+) -> int:
+    """分层切片的相邻子块重叠长度：max(overlap_min, 前块长度 × overlap_ratio)。
+
+    即规格中的 `max(50, 前块 × 15%)`。供需要按「句首对齐」重建重叠的
+    调用方使用（既有 split_text_recursive 的字符重叠口径保持不变）。
+    """
+    try:
+        prev_len = max(0, int(prev_chunk_len))
+    except (TypeError, ValueError):
+        prev_len = 0
+    try:
+        ratio = float(overlap_ratio)
+    except (TypeError, ValueError):
+        ratio = OVERLAP_RATIO
+    base = max(0, int(overlap_min))
+    return max(base, int(prev_len * max(0.0, ratio)))
+
+
+def build_parent_chunks(
+    chunks: List[str],
+    chapter_of_chunk: List[str],
+    parent_min: int = PARENT_MIN_CHARS,
+    parent_max: int = PARENT_MAX_CHARS
+) -> List[dict]:
+    """把同章节内连续的 2-4 个子块聚合为父块（父块召回层）。
+
+    规则：
+    - 章节是硬边界：父块只由同一章节的连续子块聚合，绝不跨章节；
+    - 聚合顺序为原文顺序，父块内部子块连续无空洞；
+    - 每组 2-4 个子块（PARENT_GROUP_MIN/MAX）；
+    - 字符数目标 [parent_min, parent_max]：贪心累加至达到 parent_min 即止，
+      累加下一块会超出 parent_max 时提前收束；
+    - 章节尾部残余不足 parent_min 时，若并入前一组仍不超 parent_max 且
+      组内不超 PARENT_GROUP_MAX，则并入前一组（避免产出过碎的父块）。
+
+    Args:
+        chunks: 子块文本列表（split_text_recursive / split_text_by_chapters 的产物）
+        chapter_of_chunk: 与 chunks 等长的章节标题列表
+        parent_min: 父块长度下限（字符）
+        parent_max: 父块长度上限（字符）
+
+    Returns:
+        父块列表，每项为：
+            {
+                "parent_id": "p1",              # 父块唯一标识（字符串）
+                "text": "...",                  # 子块原文顺序拼接
+                "chapter": "第一章 ...",         # 所属章节（父块不跨章节）
+                "child_indices": [0, 1, 2],     # 覆盖的子块下标（0-based）
+                "child_count": 3,               # 覆盖的子块数量
+                "chunk_length": 900,            # 父块字符数
+            }
+    """
+    if not chunks:
+        return []
+
+    parent_min = max(1, int(parent_min))
+    parent_max = max(parent_min, int(parent_max))
+
+    chapters = list(chapter_of_chunk or [])
+    if len(chapters) < len(chunks):
+        chapters.extend(["正文"] * (len(chunks) - len(chapters)))
+
+    # 1) 先按章节切成「连续区间」——章节是硬边界，父块不跨章节
+    runs: List[tuple] = []  # [(chapter, [子块下标, ...]), ...]
+    for i in range(len(chunks)):
+        chap = chapters[i]
+        if runs and runs[-1][0] == chap:
+            runs[-1][1].append(i)
+        else:
+            runs.append((chap, [i]))
+
+    parents: List[dict] = []
+    for chapter, idx_list in runs:
+        lens = [len(chunks[i]) for i in idx_list]
+        n = len(idx_list)
+
+        # 2) 章内贪心聚合：连续 2-4 个子块，字符数贴近 [parent_min, parent_max]
+        groups: List[List[int]] = []
+        i = 0
+        while i < n:
+            members: List[int] = []
+            total = 0
+            while i + len(members) < n and len(members) < PARENT_GROUP_MAX:
+                j = i + len(members)
+                if members and total + lens[j] > parent_max:
+                    break
+                members.append(j)
+                total += lens[j]
+                if total >= parent_min and len(members) >= PARENT_GROUP_MIN:
+                    break
+            if not members:
+                members = [i]
+            groups.append(members)
+            i += len(members)
+
+        # 3) 章尾残余单薄组：并入前一组（不超 parent_max 且不超块数上限）
+        if len(groups) >= 2:
+            last = groups[-1]
+            prev = groups[-2]
+            if len(prev) + len(last) <= PARENT_GROUP_MAX and \
+                    sum(lens[k] for k in prev) + sum(lens[k] for k in last) <= parent_max:
+                groups[-2] = prev + last
+                groups.pop()
+
+        # 4) 物化父块
+        for members in groups:
+            child_indices = [idx_list[k] for k in members]
+            parent_text = "".join(chunks[k] for k in child_indices)
+            parents.append({
+                "parent_id": f"p{len(parents) + 1}",
+                "text": parent_text,
+                "chapter": chapter,
+                "child_indices": child_indices,
+                "child_count": len(child_indices),
+                "chunk_length": len(parent_text),
+            })
+    return parents

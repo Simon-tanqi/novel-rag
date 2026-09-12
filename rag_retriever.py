@@ -51,6 +51,8 @@ class RAGRetriever:
         self.vector_file = vector_file
         self.metadata_file = metadata_file
         self.documents: List[Dict] = []
+        # 父块表：parent_id -> 父块记录（老向量库无 parent_chunks.json 时为空 → 扩展自动退化）
+        self.parent_chunks: Dict[str, Dict] = {}
         self.embeddings: Optional[np.ndarray] = None
         self.texts: List[str] = []
         self.reranker_model = None
@@ -202,8 +204,27 @@ class RAGRetriever:
                     "file": chapter,
                     "chunk_id": chunk_id,
                     "chapter": chapter,
+                    # 分层召回字段（老向量库无这些字段时取 None → 扩展自动退化）
+                    "parent_id": item.get("parent_id"),
+                    "prev_chunk_id": item.get("prev_chunk_id"),
+                    "next_chunk_id": item.get("next_chunk_id"),
                 })
             print(f"  元数据: {len(metadata_list)} 条")
+
+            # 加载父块表（与向量库同目录；老向量库无此文件 → 保持空表）
+            self.parent_chunks = {}
+            parent_file = os.path.join(self.vector_path, "parent_chunks.json")
+            if os.path.isfile(parent_file):
+                try:
+                    with open(parent_file, 'r', encoding='utf-8') as f:
+                        parent_list = json.load(f)
+                    if isinstance(parent_list, list):
+                        for parent in parent_list:
+                            if isinstance(parent, dict) and parent.get("parent_id") is not None:
+                                self.parent_chunks[str(parent["parent_id"])] = parent
+                    print(f"  父块表: {len(self.parent_chunks)} 条")
+                except Exception as e:
+                    print(f"  ⚠ 加载父块表失败: {e}")
         except Exception as e:
             print(f"  ✗ 加载项目向量库失败: {e}")
             self.embeddings = None
@@ -390,6 +411,119 @@ class RAGRetriever:
         )
         return split_text_recursive(text, min_chars, max_chars, overlap_chars)
 
+    # ===================== 分层上下文扩展 =====================
+
+    def _build_chunk_index(self) -> Dict[Any, Dict]:
+        """构建 chunk_id -> 文档 的临时索引（供邻居扩展按 id 反查）"""
+        index: Dict[Any, Dict] = {}
+        for doc in self.documents:
+            cid = doc.get("chunk_id")
+            if cid is None:
+                continue
+            index.setdefault(cid, doc)
+        return index
+
+    def expand_context(
+        self,
+        results: List[Dict],
+        neighbor_count: int = 1
+    ) -> List[Dict]:
+        """父子块 + 邻居扩展：命中子块 → 追加其父块与前后邻居。
+
+        分层召回的最后一步（在章节聚合之后调用）：
+        1) 命中子块本身，保持原有顺序占据列表前段
+           （`hits[:k]` 仍是纯命中序列 → Recall@k 评价口径与改造前一致）；
+        2) 追加其父块（parent_id → parent_chunks.json，含更完整叙事上下文）；
+        3) 追加同章节内前/后各 neighbor_count 个邻居（按 prev/next 链走）。
+        父块与邻居统一追加在全部命中之后，不挤占前段命中位次。
+
+        去重规则：子块按 chunk_id 去重、父块按 parent_id 去重，命中项本身
+        不会被重复追加为邻居。返回结构与 retrieve() 完全一致（List[Dict]），
+        仅新增 is_parent / is_neighbor / hit 三个标记字段便于上层按优先级组装。
+
+        老向量库（metadata 无 parent_id、目录无 parent_chunks.json）时
+        退化为恒等返回，行为与改造前一致。
+
+        Args:
+            results: chapter_aggregate_rerank 之后的命中列表
+            neighbor_count: 前后各扩展多少个邻居（0 表示只扩展父块）
+
+        Returns:
+            扩展后的文档列表（命中子块 + 父块 + 邻居，已去重）
+        """
+        if not results:
+            return []
+
+        try:
+            neighbor_count = max(0, int(neighbor_count))
+        except (TypeError, ValueError):
+            neighbor_count = 1
+
+        by_cid = self._build_chunk_index() if neighbor_count > 0 else {}
+        seen = set()
+        expanded: List[Dict] = []
+
+        def _push(doc: Optional[Dict], key, **flags):
+            if not doc or key in seen:
+                return
+            seen.add(key)
+            merged = dict(doc)
+            merged.update(flags)
+            expanded.append(merged)
+
+        # 1) 命中子块：保持原顺序占前段（不挤占位次，评价口径不变）
+        for hit in results:
+            cid = hit.get("chunk_id")
+            _push(hit, ("chunk", cid if cid is not None else id(hit)),
+                  hit=True, is_parent=False, is_neighbor=False)
+
+        # 2) 父块 + 3) 邻居：统一追加在全部命中之后
+        for hit in results:
+            # 父块（子块 → 父块，补全跨段上下文）
+            parent_id = hit.get("parent_id")
+            if parent_id is not None:
+                parent = self.parent_chunks.get(str(parent_id))
+                if parent:
+                    _push(
+                        {
+                            "text": parent.get("text", ""),
+                            "chapter": parent.get("chapter") or hit.get("chapter", ""),
+                            "file": parent.get("chapter") or hit.get("file", ""),
+                            "chunk_id": parent.get("parent_id"),
+                            "parent_id": parent.get("parent_id"),
+                            "score": hit.get("score", 0),
+                        },
+                        ("parent", str(parent_id)),
+                        hit=False, is_parent=True, is_neighbor=False,
+                    )
+
+            # 3) 前后邻居（同章节内，按 prev/next 链逐跳）
+            if neighbor_count <= 0:
+                continue
+            cursor = hit.get("prev_chunk_id")
+            for _ in range(neighbor_count):
+                if cursor is None:
+                    break
+                doc = by_cid.get(cursor)
+                if not doc:
+                    break
+                _push(doc, ("chunk", cursor),
+                      hit=False, is_parent=False, is_neighbor=True)
+                cursor = doc.get("prev_chunk_id")
+
+            cursor = hit.get("next_chunk_id")
+            for _ in range(neighbor_count):
+                if cursor is None:
+                    break
+                doc = by_cid.get(cursor)
+                if not doc:
+                    break
+                _push(doc, ("chunk", cursor),
+                      hit=False, is_parent=False, is_neighbor=True)
+                cursor = doc.get("next_chunk_id")
+
+        return expanded
+
     # ===================== 检索 =====================
 
     def retrieve(
@@ -410,7 +544,8 @@ class RAGRetriever:
             enable_rerank: 是否启用 CrossEncoder 精排
 
         Returns:
-            相关文档列表，每项包含 {text, score, chapter, chunk_id, file}
+            相关文档列表，每项包含 {text, score, chapter, chunk_id, file}，
+            并在末尾追加父块/邻居（新增 is_parent / is_neighbor / hit 标记字段）
         """
         return self.retrieve_multi(
             question, extra_queries=None, top_k=top_k,
@@ -442,7 +577,8 @@ class RAGRetriever:
             max_extra_queries: 附加查询数量上限（防改写产物过多拖慢检索）
 
         Returns:
-            相关文档列表，每项包含 {text, score, chapter, chunk_id, file}
+            相关文档列表，每项包含 {text, score, chapter, chunk_id, file}，
+            并在末尾追加父块/邻居（新增 is_parent / is_neighbor / hit 标记字段）
         """
         if not self.documents:
             print("⚠ 没有加载文档，无法检索")
@@ -521,12 +657,21 @@ class RAGRetriever:
 
         # ---------- 阶段3: 章节聚合重排 + 截断 ----------
         final_results = chapter_aggregate_rerank(candidates, top_k)
+
+        # ---------- 阶段4: 分层扩展（命中子块 → 父块 + 邻居） ----------
+        # 放在章节聚合「之后」：聚合是按 chapter 去重取每章最高分，
+        # 父块/邻居与命中子块同章，若先扩展会被聚合逻辑全部折叠掉。
+        expanded_results = self.expand_context(final_results, neighbor_count=1)
+        expand_note = ""
+        if len(expanded_results) > len(final_results):
+            expand_note = f" → 父块/邻居扩展 {len(final_results)}→{len(expanded_results)}"
+
         retrieve_time = time.time() - start_time
         print(
-            f"✓ 检索完成: {fusion_mode} → {rerank_mode} → 章节聚合 → top{top_k}，"
-            f"耗时 {retrieve_time:.3f}秒"
+            f"✓ 检索完成: {fusion_mode} → {rerank_mode} → 章节聚合 → top{top_k}"
+            f"{expand_note}，耗时 {retrieve_time:.3f}秒"
         )
-        return final_results
+        return expanded_results
 
     @staticmethod
     def _merge_queries(

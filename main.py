@@ -41,6 +41,65 @@ if _GUI_AVAILABLE:
 MAX_TURNS = 15
 
 
+def assemble_context(hits, top_k=None):
+    """组装喂给 LLM 的检索上下文（分层召回的最后一步）。
+
+    优先级：命中子块 > 父块 > 邻居；按章节分组，组内按优先级排序。
+    - 无分层扩展字段（老向量库 / 未扩展）时，输出与改造前逐字节一致：
+      每命中一个块输出一段 ``[来源:章节]\\n正文``，段间以 ``\\n\\n---\\n\\n`` 连接。
+    - 存在父块/邻居时，按章节聚合为块，章节内先命中、再父块、再邻居。
+
+    Args:
+        hits: retrieve()/retrieve_multi() 返回的文档列表
+        top_k: 兼容占位参数（未使用，保留以便调用方传参扩展）
+
+    Returns:
+        拼装好的上下文字符串
+    """
+    if not hits:
+        return "未找到相关的原文片段。"
+
+    def _kind(doc):
+        if doc.get("is_parent"):
+            return "parent"
+        if doc.get("is_neighbor"):
+            return "neighbor"
+        return "hit"
+
+    # 无分层扩展 → 保持改造前的原始输出（零行为漂移）
+    if not any(_kind(h) != "hit" for h in hits):
+        return "\n\n---\n\n".join(
+            f"[来源:{h.get('chapter', '')}]\n{h.get('text', '')}" for h in hits
+        )
+
+    order = {"hit": 0, "parent": 1, "neighbor": 2}
+    label = {"hit": "来源", "parent": "父块", "neighbor": "邻居"}
+
+    buckets = {}
+    chapter_seq = []
+    for h in hits:
+        chapter = h.get("chapter") or "未知"
+        if chapter not in buckets:
+            buckets[chapter] = []
+            chapter_seq.append(chapter)
+        buckets[chapter].append(h)
+
+    blocks = []
+    for chapter in chapter_seq:
+        items = sorted(buckets[chapter], key=lambda d: order[_kind(d)])
+        seen_text = set()
+        lines = []
+        for item in items:
+            text = item.get("text", "")
+            if not text or text in seen_text:
+                continue
+            seen_text.add(text)
+            lines.append(f"[{label[_kind(item)]}:{chapter}]\n{text}")
+        if lines:
+            blocks.append("\n\n".join(lines))
+    return "\n\n---\n\n".join(blocks) if blocks else "未找到相关的原文片段。"
+
+
 class NovelRAGApp(ctk.CTk):
     """小说RAG系统主应用"""
 
@@ -1081,12 +1140,8 @@ class NovelRAGApp(ctk.CTk):
                 finally:
                     progress_stop[0] = True
 
-                if hits:
-                    context = "\n\n---\n\n".join(
-                        [f"[来源:{h['chapter']}]\n{h['text']}" for h in hits]
-                    )
-                else:
-                    context = "未找到相关的原文片段。"
+                # 分层上下文组装：命中子块 > 父块 > 邻居，按章节分组
+                context = assemble_context(hits)
 
                 # 查询改写提示：状态栏 + 提示气泡（失败时 note 为空 → 静默不打扰）
                 if query_rewrite_note:

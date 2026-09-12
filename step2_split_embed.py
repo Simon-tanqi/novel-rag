@@ -21,6 +21,7 @@ from utils import (
     extract_chapter_title,
     resolve_embedding_model,
     load_embedding_model,
+    build_parent_chunks,
 )
 from novel_context import inject_coref_prefix, chapter_aggregate_rerank
 
@@ -79,6 +80,8 @@ def build_vector_index(
         if not chunks:
             chunks = [text]
             chapter_of_chunk = ["正文"]
+        if len(chapter_of_chunk) < len(chunks):  # 防御：章节列表与子块对齐
+            chapter_of_chunk = list(chapter_of_chunk) + ["正文"] * (len(chunks) - len(chapter_of_chunk))
 
         # ---- 指代消解增强：为疑似指代开头的 chunk 注入主语前缀 ----
         # 注入后的增广文本仅用于向量化与关键词检索，metadata 存回原始文本，
@@ -93,16 +96,44 @@ def build_vector_index(
         if progress_callback:
             progress_callback(20, 100, f"切片完成: {chunk_count} 个片段", 20)
 
+        # ---- 分层切片：子块检索 + 父块召回 + 邻居扩展 ----
+        # 父块由同章节内连续的 2-4 个子块聚合（不跨章节），替代新增函数，
+        # 既有切片逻辑与 chunk_id 生成规则完全不变。
+        parent_chunks = build_parent_chunks(chunks, chapter_of_chunk)
+        parent_of_chunk: Dict[int, str] = {}  # 子块下标(0-based) -> parent_id
+        for parent in parent_chunks:
+            for child_idx in parent.get("child_indices", []):
+                parent_of_chunk[child_idx] = parent["parent_id"]
+
+        child_chunk_ids = [
+            [idx + 1 for idx in parent.get("child_indices", [])]
+            for parent in parent_chunks
+        ]
+        for parent, ids in zip(parent_chunks, child_chunk_ids):
+            parent["child_chunk_ids"] = ids  # 供检索端按 chunk_id 反查父块
+
         # 准备元数据（chapter 为真实章节标题，供检索结果溯源展示）
         metadata = []
         for i, chunk in enumerate(chunks):
+            chapter = chapter_of_chunk[i] if i < len(chapter_of_chunk) else "正文"
+            # 邻居链仅在同章节内建立（章节是硬边界，跨章邻居无上下文意义）
+            prev_chunk_id = (
+                i if (i > 0 and chapter_of_chunk[i - 1] == chapter) else None
+            )
+            next_chunk_id = (
+                i + 2 if (i + 1 < len(chunks) and chapter_of_chunk[i + 1] == chapter) else None
+            )
             metadata.append({
                 "text": chunk,
-                "chapter": chapter_of_chunk[i] if i < len(chapter_of_chunk) else "正文",
+                "chapter": chapter,
                 "chunk_id": i + 1,
                 "chunk_length": len(chunk),
                 # 指代注入前缀（仅命中指代的 chunk 有值；检索阶段附加到查询文本）
                 "coref_prefix": chunks_with_prefix[i] if i < len(chunks_with_prefix) else "",
+                # 分层召回字段（新增，不删旧字段）
+                "parent_id": parent_of_chunk.get(i),
+                "prev_chunk_id": prev_chunk_id,
+                "next_chunk_id": next_chunk_id,
             })
 
         # 尝试加载嵌入模型（本地目录 或 HF 模型名，自动选 GPU/CPU）
@@ -181,6 +212,12 @@ def build_vector_index(
         with open(metadata_path, 'w', encoding='utf-8') as f:
             json.dump(metadata, f, ensure_ascii=False, indent=1)
         print(f"✓ 元数据已保存: {metadata_path} ({len(metadata)} 条)")
+
+        # 保存父块表（与向量库同目录，检索端按 parent_id 反查父块）
+        parent_path = os.path.join(output_dir, "parent_chunks.json")
+        with open(parent_path, 'w', encoding='utf-8') as f:
+            json.dump(parent_chunks, f, ensure_ascii=False, indent=1)
+        print(f"✓ 父块已保存: {parent_path} ({len(parent_chunks)} 条)")
 
         if progress_callback:
             progress_callback(100, 100, "向量化完成！", 100)
