@@ -20,9 +20,9 @@ novel_rag.py — NovelRAG 命令行入口（无 GUI 依赖）
     python novel_rag.py demo
 
 API Key 提供方式（任选其一，优先级从高到低）：
-    1. 环境变量  DEEPSEEK_API_KEY   （推荐，密钥不落盘）
+    1. ask/chat 的 --api-key 参数    （仅本次命令生效）
     2. config.json 中 models[].api_key
-    3. ask/chat 的 --api-key 参数
+    3. 环境变量 DEEPSEEK_API_KEY / .env（当 config.json 中 api_key 为空时兜底，密钥不落盘）
 
 嵌入模型（语义检索，可选）：
     默认使用 BAAI/bge-small-zh-v1.5（首次自动下载缓存）；
@@ -375,7 +375,7 @@ def cmd_demo(args) -> None:
       2) data/demo 数据在但未注册（clone 后首跑）→ ensure_demo_project 自动注册复用
       3) 全新环境 → 生成原文到 data/demo/source → 走 cmd_ingest 完整构建
 
-    --force: 删除现有 demo 项目与数据目录后重建（如升级为真实语义向量库）
+    --force: 删除现有 demo 项目与数据目录后重建（如更换嵌入模型后重建向量）
     --no-embedding: 强制纯关键词模式，不触发嵌入模型下载
     """
     root = os.path.dirname(os.path.abspath(__file__))
@@ -578,7 +578,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p_demo.add_argument(
         "--force", action="store_true",
-        help="删除现有 demo 项目与数据后重建（如升级为真实语义向量库）",
+        help="删除现有 demo 项目与数据后重建（如更换嵌入模型后重建向量）",
     )
     p_demo.add_argument(
         "--no-embedding", action="store_true",

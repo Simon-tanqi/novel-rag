@@ -3,8 +3,8 @@ chcp 65001 >nul
 setlocal
 
 REM ============================================================
-REM  setup_env.bat - 一键创建 Python 3.13 虚拟环境并安装依赖
-REM  适用：Windows + 已安装 Python 3.13
+REM  setup_env.bat - 一键创建 Python 虚拟环境并安装依赖
+REM  适用：Windows + 已安装 Python 3.10 ~ 3.13（自动探测，取最高可用版本）
 REM  用法：双击运行，或在 PowerShell/Cmd 中执行 .\setup_env.bat
 REM ============================================================
 
@@ -18,28 +18,44 @@ REM 1) 检查 py launcher
 where py >nul 2>&1
 if errorlevel 1 (
     echo [错误] 未找到 py launcher
-    echo 请先安装 Python 3.13：https://www.python.org/downloads/
+    echo 请先安装 Python 3.10 及以上版本：https://www.python.org/downloads/
     pause
     exit /b 1
 )
 
-REM 2) 检查 Python 3.13 是否存在
+REM 2) 依次探测可用版本（3.13 -> 3.10，取最高可用）
+set "PYVER="
 py -3.13 --version >nul 2>&1
-if errorlevel 1 (
-    echo [错误] 未安装 Python 3.13
-    echo 请从 https://www.python.org/downloads/ 下载 3.13 并勾选"Add Python to PATH"
+if not errorlevel 1 set "PYVER=3.13"
+if not defined PYVER (
+    py -3.12 --version >nul 2>&1
+    if not errorlevel 1 set "PYVER=3.12"
+)
+if not defined PYVER (
+    py -3.11 --version >nul 2>&1
+    if not errorlevel 1 set "PYVER=3.11"
+)
+if not defined PYVER (
+    py -3.10 --version >nul 2>&1
+    if not errorlevel 1 set "PYVER=3.10"
+)
+
+if not defined PYVER (
+    echo [错误] 未找到 Python 3.10 ~ 3.13
+    echo 请从 https://www.python.org/downloads/ 下载 3.10 及以上版本并勾选"Add Python to PATH"
     pause
     exit /b 1
 )
 
-echo [1/4] 检测到 Python 3.13：
-py -3.13 --version
+echo [1/4] 检测到 Python %PYVER%：
+py -%PYVER% --version
+echo.
 echo.
 
 REM 3) 创建 .venv
 if not exist .venv (
     echo [2/4] 创建虚拟环境 .venv ...
-    py -3.13 -m venv .venv
+    py -%PYVER% -m venv .venv
     if errorlevel 1 (
         echo [错误] 虚拟环境创建失败
         pause
@@ -74,7 +90,7 @@ echo.
 
 REM 6) 下一步提示
 echo ============================================================
-echo   ✅ 环境就绪（Python 3.13 + 依赖已装）
+echo   ✅ 环境就绪（Python %PYVER% + 依赖已装）
 echo ============================================================
 echo.
 echo 接下来：

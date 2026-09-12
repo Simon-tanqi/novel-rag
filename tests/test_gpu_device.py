@@ -5,6 +5,13 @@ import pytest
 import sys
 from pathlib import Path
 
+
+try:  # 可选依赖：torch 未安装时跳过嵌入模型加载用例
+    import torch  # noqa: F401
+    _HAS_TORCH = True
+except ImportError:
+    _HAS_TORCH = False
+
 # ── 隔离层：mock utils 模块的 get_root_dir ──────────────────────────────
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -65,6 +72,7 @@ class TestLoadEmbeddingModelReturnsTuple:
         assert device in ("cuda", "cpu", "mps")
         assert isinstance(model, object)  # SentenceTransformer 实例
 
+    @pytest.mark.skipif(not _HAS_TORCH, reason="torch 未安装")
     def test_returns_none_cpu_on_failure(self, monkeypatch):
         sys.path.insert(0, str(ROOT))
         import utils

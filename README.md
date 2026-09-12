@@ -1,6 +1,6 @@
 # 📚 NovelRAG — 小说领域 RAG 桌面问答系统
 
-![Python](https://img.shields.io/badge/Python-3.8+-blue)
+![Python](https://img.shields.io/badge/Python-3.10+-blue)
 ![GUI](https://img.shields.io/badge/GUI-customtkinter-orange)
 ![License](https://img.shields.io/badge/License-MIT-green)
 
@@ -22,7 +22,7 @@ OpenAI-compatible LLM backend. Supports both .txt and .epub input. No cloud depe
 - 🧹 **可插拔文本清洗**：6 种规则（去除广告水印、页码、拼音残留、修复 GBK 编码错字等），支持自定义脏词
 - 📝 **标点优先递归切片**：不足 200 字符不切分；超过 200 字符遇到句号/感叹号/冒号/问号即切片；超过 512 字符仍无上述标点则强制切片；相邻片段保留 50 字符重叠
 - 🔍 **混合召回 + 精排**：向量语义召回 + 关键词召回经 RRF（倒数排名融合）合并，可选 CrossEncoder 重排进一步提升精度；未配置嵌入模型时自动回退纯关键词检索，功能不瘫痪
-- 💬 **多轮对话**：手动拼接最近上下文 + 轮数上限，防止上下文膨胀与接口超时
+- 💬 **多轮对话**：手动拼接最近 20 条消息（约 10 轮，单条截断 200 字）作为上下文，防止上下文膨胀与接口超时
 - ⚙️ **Prompt 模板外置**：可编辑系统提示，强制模型「仅依据原文、禁止编造」
 - 🛡️ **密钥安全**：API Key 不写死在仓库 —— 支持环境变量 `DEEPSEEK_API_KEY` 兜底
 - ⌨️ **CLI 一键管线**：`ingest / ask / chat / list / demo`，无 GUI 也能「txt + API Key → 可问答 RAG 项目」
@@ -112,12 +112,17 @@ novel-rag/
 ├── message_bubble.py       # 聊天气泡组件
 ├── format_loader.py        # 多格式加载器（txt 直读 / epub 提取）
 ├── utils.py                # 路径 / 文本工具函数（含 GPU 设备自动检测）
+├── eval_retrieval.py       # 检索效果评估（QA 集 → Recall@K，无需 API Key / 联网）
+├── conftest.py             # pytest 全局配置（测试路径注入）
+├── setup_env.bat           # Windows 一键环境脚本（自动探测 Python 3.10 ~ 3.13）
 ├── scripts/
 │   ├── rebuild_embeddings.py   # 一键补 embeddings.npy（向量库损坏时用）
 │   └── download_models.py      # 下载模型到本地 models/（首次 clone 后运行一次）
-├── tests/                  # 单元测试（83 项，pytest 全通过）
+├── tests/                  # 单元测试（126 项；缺可选依赖时相关用例自动跳过）
+├── .env.example            # 环境变量模板（复制为 .env 后填入 API Key）
 ├── config.example.json     # 配置模板（复制为 config.json 后填写）
 ├── requirements.txt
+├── LICENSE                 # MIT
 └── README.md
 ```
 
@@ -126,7 +131,7 @@ novel-rag/
 > **例外**：`data/demo/`（内置原创示例小说的向量库）已通过 `.gitignore` 白名单放行，随仓库发布，
 > 确保 clone 后开箱即用。
 
-## ⚡ 面试官一键运行验证
+## ⚡ 一键运行验证
 
 ```bash
 # 1. 装环境（Windows 双击 setup_env.bat，或手动执行）
@@ -159,12 +164,12 @@ python novel_rag.py ask --name demo "沈青的师父是谁？"
  python novel_rag.py ask --name demo "沈青的师父是谁？"  # CLI 单次问答
 ```
 >
- **⚠ 仓库预置 demo 向量库**：`data/demo/` 已随仓库发布（含原创小说原文 + embeddings.npy + metadata.json，无版权风险）。clone 后首次运行任何命令时 `ProjectManager` 自动注册 demo 项目并设为当前项目，**开箱即用**。如需升级为真实语义向量（如换模型后），执行 `python novel_rag.py demo --force` 重建。环境变量 `HF_ENDPOINT=https://hf-mirror.com` 可在国内加速模型下载。
+ **⚠ 仓库预置 demo 向量库**：`data/demo/` 已随仓库发布（含原创小说原文 + embeddings.npy + metadata.json，无版权风险）。clone 后首次运行任何命令时 `ProjectManager` 自动注册 demo 项目并设为当前项目，**开箱即用**。预置向量库由 `BAAI/bge-small-zh-v1.5` 生成（512 维归一化向量，可直接语义检索）；如需改用其他嵌入模型重建，执行 `python novel_rag.py demo --force`。环境变量 `HF_ENDPOINT=https://hf-mirror.com` 可在国内加速模型下载。
 
 > 💡 **5 分钟用你自己的小说跑通（推荐 CLI）** —— 只需要**一本小说的 .txt + 一个 API Key**：
 
 ```bash
-# 1. 安装依赖（Windows 用户可直接运行一键脚本：setup_env.bat，自动装 GPU 版 torch + 全部依赖）
+# 1. 安装依赖（Windows 用户可运行一键脚本 setup_env.bat：自动创建 .venv 并安装 requirements.txt；torch 需按脚本末尾的 GPU 提示选择 CPU / GPU 版本手动安装）
 pip install -r requirements.txt
 
 # 2. 提供 API Key（推荐环境变量，密钥不落盘；Windows PowerShell 用 $env:DEEPSEEK_API_KEY=...）
@@ -188,7 +193,7 @@ python main.py
 
 ### 1. 环境要求
 
-- Python 3.10+（推荐 3.11 / 3.13）
+- Python 3.10+（推荐 3.11 / 3.13）；Windows 一键脚本 `setup_env.bat` 自动探测本机已装的 3.10 ~ 3.13 版本
 - pip
 - **GPU 加速（可选，推荐有 NVIDIA 显卡的用户）**：
   RTX 3060 及以上显卡安装 CUDA 版 torch 后向量化自动使用 GPU（batch_size 从 32 → 256，速度提升 10~20×）：
@@ -233,7 +238,7 @@ cp config.example.json config.json   # Windows: copy config.example.json config.
 python novel_rag.py ask --name 盘龙 "你的问题" --api-key sk-xxxxxxxx
 ```
 
-> 优先级：系统环境变量 > .env > config.json > 命令行参数；程序启动时会自动加载项目根目录的 .env。
+> API Key 优先级（高 → 低）：命令行 `--api-key` > `config.json` 的 `models[].api_key` > 环境变量 / `.env` 中的 `DEEPSEEK_API_KEY`（仅在配置文件中 api_key 为空时兜底）。程序启动时会自动加载项目根目录的 `.env` 并注入为环境变量。
 
 **嵌入模型（语义检索用，自动下载）：**
 
@@ -287,19 +292,21 @@ python -m pytest tests/ -v
 API 客户端重试与响应解析、demo 自动注册与 cmd_demo 分支、cmd_ingest 同路径跳过、
 epub 格式加载与 HTML 标签剥离。
 
-120+ 项测试全过（含混合召回 RRF、CrossEncoder 精排、降级路径等），核心用例秒级完成。
+126 项测试（含混合召回 RRF、CrossEncoder 精排、降级路径等），核心用例秒级完成；
+依赖装齐时 126 项全过，未安装可选依赖（`ebooklib` / `torch`）时对应用例自动 skip。
 
 ## 效果评估思路
 
 - 内置可执行评估脚本 eval_retrieval.py（无需 API Key、无需联网）：
-  `ash
+  ```bash
   # 对 demo 项目跑 12 道「问题-预期章节」QA，量化召回：
   python eval_retrieval.py --name demo --top-k 3
   # 输出示例：QA 总数: 12 / Recall@3 = 12/12 = 100.0%
-  `
+  ```
 - 命中判定按「同章」（章节名前缀匹配），输出逐题命中章节明细，可 --json-out 导出；
 - 自建语料时，把 QA 集写成 JSON（question + 预期命中章节）即可换库复跑；
 - 对生成答案做**忠实度人工抽检**：答案关键事实是否能在命中片段中找到依据、有无编造。
+
 ## 🗺️ Roadmap
 
 - [x] 多项目管理 + 向量库导入
@@ -309,7 +316,7 @@ epub 格式加载与 HTML 标签剥离。
 - [x] epub 格式支持（format_loader.py，懒加载 ebooklib + BeautifulSoup）
 - [x] 切片阶段保留真实章节标题，回答精确到「第 X 章」
 - [x] 指代消解前缀注入 + 章节聚合重排（novel_context.py，见「关键设计决策」）
-- [x] 内置 demo 向量库（随仓库预置，clone 后首跑自动注册；`--force` 可重建为真实语义向量）
+- [x] 内置 demo 向量库（随仓库预置，clone 后首跑自动注册；`--force` 可按当前嵌入模型重建）
 - [x] CrossEncoder 重排（bge-reranker-base，CLI/GUI 双入口支持，`--rerank` / `--no-rerank` 命令行开关）
 - [ ] HTTP 服务接口，便于远程脚本化评估
 - [x] 混合召回（向量 + 关键词 RRF 融合，中文 bigram 扩展）
