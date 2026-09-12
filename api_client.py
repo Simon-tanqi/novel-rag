@@ -71,15 +71,23 @@ class APIClient:
                 url = url + "/v1/chat/completions"
         return url
 
-    def _build_request(self, message: str, enable_thinking: bool) -> dict:
-        """构造请求体"""
+    def _build_request(self, message: str, enable_thinking: bool,
+                       temperature: float = 0.1,
+                       max_tokens: Optional[int] = None) -> dict:
+        """构造请求体
+
+        temperature / max_tokens 为新增的可选参数（默认值与历史行为一致）：
+        供「查询改写」等需要确定性、短输出的轻量调用使用（temperature=0）。
+        """
         data = {
             "model": self.model_name,
             "messages": [
                 {"role": "user", "content": message}
             ],
-            "temperature": 0.1,
+            "temperature": temperature,
         }
+        if max_tokens is not None:
+            data["max_tokens"] = int(max_tokens)
         if enable_thinking:
             data["thinking"] = {"type": "enabled"}
         return data
@@ -149,7 +157,9 @@ class APIClient:
         raise APIClientError("模型返回了空内容（content 与 reasoning_content 均为空）。")
 
     def call_api(self, message: str, enable_thinking: bool = False,
-                 max_retries: Optional[int] = None) -> str:
+                 max_retries: Optional[int] = None,
+                 temperature: float = 0.1,
+                 max_tokens: Optional[int] = None) -> str:
         """
         调用API发送消息（带指数退避重试）。
 
@@ -157,6 +167,8 @@ class APIClient:
             message: 用户消息（或完整Prompt）
             enable_thinking: 是否启用深度思考模式
             max_retries: 本次调用最大重试次数（None 使用构造参数）
+            temperature: 采样温度（默认 0.1；查询改写场景传 0）
+            max_tokens: 输出长度上限（默认 None=不限制）
 
         Returns:
             AI回复文本
@@ -164,7 +176,8 @@ class APIClient:
         Raises:
             APIClientError: 重试耗尽后仍失败 / 4xx 参数错误 / 响应解析失败
         """
-        data = self._build_request(message, enable_thinking)
+        data = self._build_request(message, enable_thinking,
+                                   temperature, max_tokens)
         attempts = (max_retries if max_retries is not None
                     else self.max_retries) + 1
         last_error: Optional[APIClientError] = None

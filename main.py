@@ -26,6 +26,7 @@ from config_manager import ConfigManager
 from project_manager import ProjectManager
 from api_client import APIClient
 from rag_retriever import RAGRetriever
+from query_rewriter import has_meta_terms, rewrite_query
 from chat_logger import ChatLogger
 from message_bubble import MessageBubble
 from settings_window import SettingsWindow
@@ -58,6 +59,8 @@ class NovelRAGApp(ctk.CTk):
         self.turn_count = 0
         self.api_timeout = False
         self.api_start_time = 0
+        # 向量检索提示：首次出现时插入提示气泡，避免反复刷屏（仅提示一次/会话）
+        self._vector_mode_warned = False
 
         # 加载当前项目
         self._load_current_project()
@@ -1033,6 +1036,8 @@ class NovelRAGApp(ctk.CTk):
             enable_rerank = bool(self.config_manager.get("enable_rerank", False))
 
             if vector_path and os.path.exists(vector_path) and prompt_template:
+                vector_status = ""  # 向量检索状态（空=向量正常参与）
+                query_rewrite_note = ""  # 查询改写提示（空=未触发或失败降级）
                 self.after(0, lambda: self.status_label.configure(text="状态: 正在加载检索引擎（首次需 5-15s）..."))
 
                 # 启动进度心跳线程，让用户看到系统在干活（每秒更新状态栏）
@@ -1060,7 +1065,19 @@ class NovelRAGApp(ctk.CTk):
                         vector_file=vector_file,
                         metadata_file=metadata_file
                     )
-                    hits = retriever.retrieve(message, top_k=top_k, enable_rerank=enable_rerank)
+                    # 检索前查询改写：仅当问题命中元词（主角/男主/女主…）时才多调一次
+                    # LLM；失败自动回退原查询（extra_queries 为空 → 行为与改造前一致）
+                    extra_queries, query_rewrite_note = self._maybe_rewrite_query(
+                        message, api_url, api_key, model_name
+                    )
+                    hits = retriever.retrieve_multi(
+                        message,
+                        extra_queries=extra_queries,
+                        top_k=top_k,
+                        enable_rerank=enable_rerank
+                    )
+                    # 读取向量检索状态：若向量检索未生效，记录用于向用户提示
+                    vector_status = getattr(retriever, "last_vector_status", "") or ""
                 finally:
                     progress_stop[0] = True
 
@@ -1071,6 +1088,18 @@ class NovelRAGApp(ctk.CTk):
                 else:
                     context = "未找到相关的原文片段。"
 
+                # 查询改写提示：状态栏 + 提示气泡（失败时 note 为空 → 静默不打扰）
+                if query_rewrite_note:
+                    def _notify_rewrite_note(n=query_rewrite_note):
+                        self.status_label.configure(text=n)
+                        try:
+                            note_bubble = MessageBubble(self.chat_container, n, is_user=False)
+                            note_bubble.pack(fill="x")
+                            self._scroll_to_bottom()
+                        except Exception:
+                            pass
+                    self.after(0, _notify_rewrite_note)
+
                 # 拼接多轮对话历史
                 history = self._get_conversation_history_for_prompt()
                 final_prompt = self._build_prompt_with_history(
@@ -1078,6 +1107,7 @@ class NovelRAGApp(ctk.CTk):
                 )
             else:
                 final_prompt = message
+                vector_status = ""  # 未走检索路径时无向量提示
 
             # 调用API
             self.after(0, lambda: self.status_label.configure(text="状态: 正在调用AI..."))
@@ -1089,6 +1119,21 @@ class NovelRAGApp(ctk.CTk):
             if not self.api_timeout:
                 self.after(0, lambda r=reply: self._add_ai_message(r))
 
+            # 向量检索未生效时，提示用户（气泡仅提示一次，状态栏每次都会显示）
+            if vector_status:
+                note = f"⚠ {vector_status}。若需启用语义召回，请检查嵌入模型配置与依赖。"
+                def _notify_vector_note(n=note):
+                    self.status_label.configure(text=n)
+                    if not self._vector_mode_warned:
+                        self._vector_mode_warned = True
+                        try:
+                            note_bubble = MessageBubble(self.chat_container, n, is_user=False)
+                            note_bubble.pack(fill="x")
+                            self._scroll_to_bottom()
+                        except Exception:
+                            pass
+                self.after(0, _notify_vector_note)
+
         except Exception as e:
             _mark_completed(success=False)  # API 失败 → 防止 timeout 线程重复报警
             if not self.api_timeout:
@@ -1096,6 +1141,53 @@ class NovelRAGApp(ctk.CTk):
                 print(f"API Error: {traceback.format_exc()}")
                 self.after(0, lambda: self._show_error(error_msg))
                 self.after(0, lambda: self.status_label.configure(text="状态: 错误"))
+
+    def _maybe_rewrite_query(self, question, api_url, api_key, model_name):
+        """检索前查询改写（元词路由触发 + 静默降级）。
+
+        只在问题命中元词（主角/男主/女主/主人公/男一号/女一号/主角团…）时才
+        发起一次短 LLM 调用，把元词改写为具体人物名；非元词问题直接返回，
+        零额外开销。任何异常（网络/解析/配置）都回退原查询，不影响原链路。
+
+        Args:
+            question: 用户原始问题
+            api_url / api_key / model_name: 当前选中模型的连接信息（复用现有配置）
+
+        Returns:
+            (extra_queries, note)
+            extra_queries: 改写查询列表，供 retrieve_multi 做多路召回
+            note: 给用户看的提示文案（如「查询改写：主角 → 陈曦」）；
+                  未触发或失败时为空串 → 调用方不展示、不提示
+        """
+        try:
+            if not self.config_manager.get_enable_query_rewrite():
+                return [], ""  # 开关关闭 → 完全走原有路径
+            if not has_meta_terms(question):
+                return [], ""  # 路由触发：非元词问题零额外 LLM 调用
+        except Exception:
+            return [], ""
+
+        self.after(0, lambda: self.status_label.configure(
+            text="状态: 正在改写查询（元词 → 具体人物）..."
+        ))
+        novel_name = ""
+        try:
+            if self.current_project:
+                novel_name = self.current_project.get("name", "") or ""
+        except Exception:
+            novel_name = ""
+
+        try:
+            rewrite_client = APIClient(api_url, api_key, model_name)
+            result = rewrite_query(question, rewrite_client, novel_name=novel_name)
+        except Exception as e:
+            # rewrite_query 内部已兜底，这里再兜一层，确保永不打断问答链路
+            print(f"⚠ 查询改写异常（{type(e).__name__}: {e}），本次回退原查询")
+            return [], ""
+
+        if not result.succeeded:
+            return [], ""  # 静默降级：失败不提示，用户无感知
+        return result.extra_queries, result.summary
 
     def _api_timeout_check(self):
         """API超时检测（根据 api_completed 标志提前退出）"""

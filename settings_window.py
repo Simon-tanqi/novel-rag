@@ -424,6 +424,29 @@ class SettingsWindow(ctk.CTkToplevel):
             text_color="gray"
         ).pack(side="left")
 
+        # 查询改写开关
+        rewrite_frame = ctk.CTkFrame(vector_frame, fg_color="transparent")
+        rewrite_frame.pack(anchor="w", pady=(10, 5), fill="x")
+
+        self.enable_query_rewrite_var = ctk.BooleanVar(
+            value=self.config_manager.get("enable_query_rewrite", True)
+        )
+        rewrite_switch = ctk.CTkSwitch(
+            rewrite_frame,
+            text="启用查询改写",
+            variable=self.enable_query_rewrite_var,
+            font=("Microsoft YaHei UI", 11)
+        )
+        rewrite_switch.pack(side="left", padx=(0, 10))
+
+        ctk.CTkLabel(
+            rewrite_frame,
+            text="问题含「主角/男主/女主」等元词时，先调一次模型改写为具体人名再检索"
+                 "（仅命中元词才发起调用，失败自动回退原查询）",
+            font=("Microsoft YaHei UI", 10),
+            text_color="gray"
+        ).pack(side="left")
+
         # 嵌入模型设置
         embedding_frame = ctk.CTkFrame(vector_frame, fg_color="#2C2C2C", corner_radius=10)
         embedding_frame.pack(fill="x", pady=(15, 5))
@@ -495,6 +518,7 @@ class SettingsWindow(ctk.CTkToplevel):
         self.config_manager.set("prompt_template", prompt_text)
         self.config_manager.set("top_k", top_k if top_k else "3")
         self.config_manager.set("enable_thinking", self.enable_thinking_var.get())
+        self.config_manager.set("enable_query_rewrite", self.enable_query_rewrite_var.get())
         self.config_manager.set("embedding_model_path", self.embedding_path_entry.get())
         self.config_manager.save()
 

@@ -140,7 +140,7 @@ class ProjectManager:
         self,
         name: str,
         source_path: str,
-        chunk_size: int = 500,
+        chunk_size: int = 512,
         overlap: int = 50,
         clean_rules: Optional[List[str]] = None,
         custom_dirty_words: Optional[List[str]] = None
@@ -151,8 +151,8 @@ class ProjectManager:
         Args:
             name: 小说名称
             source_path: 源文件路径
-            chunk_size: 切片大小
-            overlap: 重叠长度
+            chunk_size: 切片硬上限（字符数，规格区间 [200, 512]，默认 512）
+            overlap: 相邻片段重叠字符数（默认 50）
             clean_rules: 清洗规则列表
             custom_dirty_words: 自定义脏数据关键词
 

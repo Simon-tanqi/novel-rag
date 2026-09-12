@@ -14,6 +14,10 @@ from typing import List, Dict, Callable, Optional
 
 from utils import (
     split_text_by_chapters,
+    resolve_split_params,
+    MIN_CHUNK_CHARS,
+    MAX_CHUNK_CHARS,
+    DEFAULT_OVERLAP_CHARS,
     extract_chapter_title,
     resolve_embedding_model,
     load_embedding_model,
@@ -32,8 +36,8 @@ def _pick_characters(chunk_texts: List[str]) -> List[str]:
 
 def build_vector_index(
     text: str,
-    chunk_size: int = 500,
-    overlap: int = 50,
+    chunk_size: int = MAX_CHUNK_CHARS,
+    overlap: int = DEFAULT_OVERLAP_CHARS,
     output_dir: str = "./vector_db",
     embedding_model_path: Optional[str] = None,
     progress_callback: Optional[Callable] = None
@@ -41,10 +45,15 @@ def build_vector_index(
     """
     构建向量索引
 
+    切片规格：文本不足 MIN_CHUNK_CHARS(200) 字符不切分；超过 200 字符后
+    寻找句号/感叹号/冒号/问号，命中即切片；距上次切分点超过
+    MAX_CHUNK_CHARS(512) 字符仍无上述标点则强制切片；相邻片段重叠
+    overlap 个字符。
+
     Args:
         text: 输入文本
-        chunk_size: 切片大小（字符数）
-        overlap: 重叠长度（字符数）
+        chunk_size: 切片硬上限（字符数，规格区间 [200, 512]，缺省 512）
+        overlap: 相邻片段重叠长度（字符数，缺省 50）
         output_dir: 输出目录
         embedding_model_path: 嵌入模型路径（可选，为空使用关键词检索）
         progress_callback: 进度回调 (step: int, total: int, message: str, percent: float)
@@ -56,18 +65,15 @@ def build_vector_index(
         # 创建输出目录
         os.makedirs(output_dir, exist_ok=True)
 
-        # 调整参数以适配切片函数
-        # chunk_size 作为 max_chars，overlap 转换为句子数（约1-2句）
-        max_chars = chunk_size
-        min_chars = max(100, chunk_size // 3)
-        overlap_sentences = max(1, overlap // 50) if overlap > 0 else 1
+        # 规格切片参数：min/max/重叠均由 utils 统一映射（见 resolve_split_params）
+        min_chars, max_chars, overlap_chars = resolve_split_params(chunk_size, overlap)
 
         # 文本切片（按章节边界切分，chunk 携带真实章节标题）
         if progress_callback:
             progress_callback(0, 100, "正在切片...", 0)
 
         chunks, chapter_of_chunk = split_text_by_chapters(
-            text, min_chars, max_chars, overlap_sentences
+            text, min_chars, max_chars, overlap_chars
         )
 
         if not chunks:
@@ -197,8 +203,8 @@ def build_vector_index(
 
 def build_vector_index_from_file(
     input_file: str,
-    chunk_size: int = 500,
-    overlap: int = 50,
+    chunk_size: int = MAX_CHUNK_CHARS,
+    overlap: int = DEFAULT_OVERLAP_CHARS,
     output_dir: str = "./vector_db",
     embedding_model_path: Optional[str] = None,
     progress_callback: Optional[Callable] = None
@@ -208,8 +214,8 @@ def build_vector_index_from_file(
 
     Args:
         input_file: 输入文本文件路径
-        chunk_size: 切片大小
-        overlap: 重叠长度
+        chunk_size: 切片硬上限（字符数，规格区间 [200, 512]，缺省 512）
+        overlap: 相邻片段重叠长度（字符数，缺省 50）
         output_dir: 输出目录
         embedding_model_path: 嵌入模型路径
         progress_callback: 进度回调
@@ -299,8 +305,10 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="切片与向量化工具")
     parser.add_argument("--input", required=True, help="输入文本文件")
     parser.add_argument("--output", default="./vector_db", help="输出目录")
-    parser.add_argument("--chunk-size", type=int, default=500, help="切片大小")
-    parser.add_argument("--overlap", type=int, default=50, help="重叠长度")
+    parser.add_argument("--chunk-size", type=int, default=MAX_CHUNK_CHARS,
+                        help=f"切片硬上限（字符数，默认 {MAX_CHUNK_CHARS}）")
+    parser.add_argument("--overlap", type=int, default=DEFAULT_OVERLAP_CHARS,
+                        help=f"相邻片段重叠字符数（默认 {DEFAULT_OVERLAP_CHARS}）")
     parser.add_argument("--model", default=None, help="嵌入模型路径")
     args = parser.parse_args()
 

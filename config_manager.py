@@ -82,6 +82,8 @@ class ConfigManager:
             "enable_thinking": False,
             "enable_rerank": False,
             "reranker_model_path": "",
+            # 检索前查询改写：命中元词（主角/男主/女主…）时多调一次 LLM 做改写
+            "enable_query_rewrite": True,
             # 嵌入模型：默认用 bge-small-zh-v1.5（自动下载）；可用 EMBEDDING_MODEL 覆盖
             "embedding_model_path": os.environ.get("EMBEDDING_MODEL", "").strip() or DEFAULT_EMBEDDING_MODEL,
             "vector_folder": "",
@@ -256,4 +258,13 @@ class ConfigManager:
     def set_reranker_model_path(self, path: str):
         """设置重排模型路径"""
         self.set("reranker_model_path", path)
+        self.save()
+
+    def get_enable_query_rewrite(self) -> bool:
+        """获取「启用查询改写」开关（缺省视为开启）"""
+        return bool(self.get("enable_query_rewrite", True))
+
+    def set_enable_query_rewrite(self, enabled: bool):
+        """设置「启用查询改写」开关"""
+        self.set("enable_query_rewrite", bool(enabled))
         self.save()

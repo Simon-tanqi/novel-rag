@@ -388,88 +388,174 @@ def _find_chapter_boundaries(text: str):
     return boundaries
 
 
-def split_text_by_sentences(
-    text: str,
-    min_chars: int = 100,
-    max_chars: int = 512,
-    overlap_sentences: int = 1
-) -> List[str]:
+# ===================== 分片规格（递归切片） =====================
+# 1) 距上次切分点不足 MIN_CHUNK_CHARS 字符 → 不再切分，剩余作为尾块；
+# 2) 超过 MIN_CHUNK_CHARS → 向后寻找句末标点，命中即在其后切分；
+# 3) 距上次切分点超过 MAX_CHUNK_CHARS 仍无标点 → 强制切分；
+# 4) 相邻片段保留 DEFAULT_OVERLAP_CHARS 字符重叠。
+MIN_CHUNK_CHARS = 200
+MAX_CHUNK_CHARS = 512
+DEFAULT_OVERLAP_CHARS = 50
+# 命中即切片的标点集合：句号、感叹号、冒号、问号
+CHUNK_BOUNDARY_PUNCT = ("。", "！", "：", "？")
+
+
+def resolve_split_params(chunk_size=None, overlap=None):
+    """把配置中的 chunk_size / overlap 映射为规格切片参数。
+
+    - 硬上限 max_chars：chunk_size 仅当落在 [MIN_CHUNK_CHARS, MAX_CHUNK_CHARS]
+      区间内时生效，否则回落规格值 MAX_CHUNK_CHARS（避免超出模型 512 上下文）；
+    - 下限 min_chars：规格值 MIN_CHUNK_CHARS（不足不切分）；
+    - 重叠 overlap_chars：按字符透传（默认 50），<=0 表示不重叠。
+
+    Returns:
+        (min_chars, max_chars, overlap_chars)
     """
-    按句子切分文本，使用滑动窗口策略（不含章节标题，兼容旧签名）
+    try:
+        cs = int(chunk_size) if chunk_size is not None else 0
+    except (TypeError, ValueError):
+        cs = 0
+    max_chars = cs if MIN_CHUNK_CHARS < cs <= MAX_CHUNK_CHARS else MAX_CHUNK_CHARS
+    min_chars = min(MIN_CHUNK_CHARS, max_chars)
+    try:
+        ov = int(overlap) if overlap is not None else DEFAULT_OVERLAP_CHARS
+    except (TypeError, ValueError):
+        ov = DEFAULT_OVERLAP_CHARS
+    return min_chars, max_chars, max(0, ov)
+
+
+def split_text_recursive(
+    text: str,
+    min_chars: int = MIN_CHUNK_CHARS,
+    max_chars: int = MAX_CHUNK_CHARS,
+    overlap_chars: int = DEFAULT_OVERLAP_CHARS
+) -> List[str]:
+    """按规格切片：标点优先 + 硬上限 + 字符重叠。
+
+    规则：
+    1. 距上次切分点不足 min_chars → 不切分，剩余整体作为尾块；
+    2. 超过 min_chars 后寻找 。！：？ → 命中即在其后切分；
+    3. 距上次切分点超过 max_chars 仍无上述标点 → 在 max_chars 处强制切分；
+    4. 相邻片段保留 overlap_chars 字符重叠。
+
+    切分只做位置裁剪、不改写任何字符（标点/换行原样保留），
+    因此 chunk 文本与原文一致，可安全用于引用溯源。
 
     Args:
         text: 输入文本
-        min_chars: 最小块字符数
-        max_chars: 最大块字符数
-        overlap_sentences: 重叠句子数
+        min_chars: 最小切分距离（不足不切分）
+        max_chars: 无标点时的强制切分距离（硬上限）
+        overlap_chars: 相邻片段重叠字符数
+
+    Returns:
+        文本块列表
+    """
+    if not text:
+        return []
+    min_chars = max(1, int(min_chars))
+    max_chars = max(min_chars, int(max_chars))
+    overlap_chars = max(0, int(overlap_chars))
+    if overlap_chars >= max_chars:
+        overlap_chars = 0  # 重叠不得吞掉整块，避免原地重复切分
+
+    punct = set(CHUNK_BOUNDARY_PUNCT)
+    n = len(text)
+    chunks: List[str] = []
+    start = 0
+    last_cut = 0  # 上一次切分点（绝对索引）：防止回退重叠后重复命中同一标点
+
+    while start < n:
+        if n - start <= min_chars:
+            # 不足 min_chars：不再切分，剩余作为尾块
+            tail = text[start:]
+            if tail.strip():
+                chunks.append(tail)
+            break
+
+        window_end = min(n, start + max_chars)
+        scan_from = max(start + min_chars, last_cut)
+        cut = -1
+        for i in range(scan_from, window_end):
+            if text[i] in punct:
+                cut = i + 1  # 标点归入前一块
+                break
+        if cut < 0:
+            cut = window_end  # 无标点：强制切分（或已到文本末尾）
+
+        chunk = text[start:cut]
+        if chunk.strip():
+            chunks.append(chunk)
+        if cut >= n:
+            break
+        last_cut = cut
+        next_start = cut - overlap_chars
+        start = next_start if next_start > start else start + 1
+    return chunks
+
+
+def split_text_by_sentences(
+    text: str,
+    min_chars: int = 100,
+    max_chars: int = MAX_CHUNK_CHARS,
+    overlap_sentences: int = 1
+) -> List[str]:
+    """（旧接口，兼容保留）标点切片 + 句子级重叠。
+
+    切片主逻辑已统一为规格切片 split_text_recursive（overlap 以字符计），
+    本接口仅额外按“句”追加重叠，供历史调用方使用。
+    新代码请直接调用 split_text_recursive。
+
+    Args:
+        text: 输入文本
+        min_chars: 最小切分距离（不足不切分）
+        max_chars: 无标点时的强制切分距离
+        overlap_sentences: 重叠句子数（0/负数表示不重叠）
 
     Returns:
         切分后的文本块列表
     """
-    return _chunk_by_sentences(text, min_chars, max_chars, overlap_sentences)
+    chunks = split_text_recursive(text, min_chars, max_chars, overlap_chars=0)
+    if not overlap_sentences or overlap_sentences <= 0 or len(chunks) <= 1:
+        return chunks
+    out = [chunks[0]]
+    for prev, cur in zip(chunks, chunks[1:]):
+        prev_sents = [s for s in re.split(r'(?<=[。！？：…])', prev) if s.strip()]
+        overlap = ''.join(prev_sents[-overlap_sentences:])
+        out.append(overlap + cur)
+    return out
 
 
 def _chunk_by_sentences(
     text: str,
     min_chars: int,
     max_chars: int,
-    overlap_sentences: int,
+    overlap_sentences: int = 1,
     max_chunk_length: Optional[int] = None
 ) -> List[str]:
+    """（旧私有入口，兼容保留）转调 split_text_by_sentences。
+
+    max_chunk_length 已废弃：无标点超长段落由规格硬上限 max_chars 兜底。
     """
-    将一段连续正文按句子切分为文本块。
-
-    - 单句超过 max_chars 时按 max_chunk_length（默认 max_chars）硬切，避免超长块；
-    - 其余逻辑与旧 split_text_by_sentences 一致（句子边界不截断）。
-    """
-    sentences = re.split(r'[。！？；\n]', text)
-    sentences = [s.strip() for s in sentences if s.strip()]
-
-    chunks = []
-    current_chunk = []
-    current_len = 0
-    hard_limit = max_chunk_length or max_chars
-
-    for sent in sentences:
-        sent_len = len(sent)
-        if sent_len > hard_limit:
-            # 单句超长：先收尾当前块，再按字符硬切该句
-            if current_chunk:
-                chunks.append('。'.join(current_chunk) + '。')
-                current_chunk = []
-                current_len = 0
-            for start in range(0, sent_len, hard_limit):
-                chunks.append(sent[start:start + hard_limit])
-            continue
-        if current_len + sent_len > max_chars and current_chunk:
-            chunks.append('。'.join(current_chunk) + '。')
-            overlap = current_chunk[-overlap_sentences:] if overlap_sentences > 0 else []
-            current_chunk = overlap
-            current_len = sum(len(s) for s in overlap)
-        current_chunk.append(sent)
-        current_len += sent_len
-
-    if current_chunk:
-        chunk_text = '。'.join(current_chunk) + '。'
-        chunks.append(chunk_text)
-
-    return chunks
+    return split_text_by_sentences(text, min_chars, max_chars, overlap_sentences)
 
 
 def split_text_by_chapters(
     text: str,
-    min_chars: int = 100,
-    max_chars: int = 512,
-    overlap_sentences: int = 1
+    min_chars: int = MIN_CHUNK_CHARS,
+    max_chars: int = MAX_CHUNK_CHARS,
+    overlap_chars: int = DEFAULT_OVERLAP_CHARS
 ):
     """
     按章节边界切片：每个章节独立切块，chunk 携带所属章节标题。
 
+    章内切块走规格切片 split_text_recursive（标点优先 + 硬上限 + 字符重叠），
+    章节标题仅作为元数据、不进入正文。
+
     Args:
         text: 输入全文
-        min_chars: 最小块字符数
-        max_chars: 最大块字符数
-        overlap_sentences: 重叠句子数（句）
+        min_chars: 最小切分距离（不足不切分）
+        max_chars: 无标点时的强制切分距离
+        overlap_chars: 相邻片段重叠字符数
 
     Returns:
         (chunks, chapter_of_chunk):
@@ -480,7 +566,7 @@ def split_text_by_chapters(
     """
     boundaries = _find_chapter_boundaries(text)
     if not boundaries:
-        chunks = _chunk_by_sentences(text, min_chars, max_chars, overlap_sentences)
+        chunks = split_text_recursive(text, min_chars, max_chars, overlap_chars)
         return chunks, ["正文"] * len(chunks)
 
     chunks, chapter_of_chunk = [], []
@@ -496,8 +582,7 @@ def split_text_by_chapters(
         body = '\n'.join(body_lines).strip()
         if not body:
             continue
-        for chunk in _chunk_by_sentences(body, min_chars, max_chars,
-                                         overlap_sentences):
+        for chunk in split_text_recursive(body, min_chars, max_chars, overlap_chars):
             chunks.append(chunk)
             chapter_of_chunk.append(title)
 
@@ -505,13 +590,12 @@ def split_text_by_chapters(
     last_end = boundaries[-1][1]
     tail = '\n'.join(text.split('\n')[last_end:]).strip()
     if tail:
-        for chunk in _chunk_by_sentences(tail, min_chars, max_chars,
-                                         overlap_sentences):
+        for chunk in split_text_recursive(tail, min_chars, max_chars, overlap_chars):
             chunks.append(chunk)
             chapter_of_chunk.append("正文")
 
     if not chunks:
-        chunks = _chunk_by_sentences(text, min_chars, max_chars, overlap_sentences)
+        chunks = split_text_recursive(text, min_chars, max_chars, overlap_chars)
         chapter_of_chunk = ["正文"] * len(chunks)
     return chunks, chapter_of_chunk
 

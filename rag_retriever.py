@@ -19,9 +19,16 @@ import re
 import json
 import time
 import numpy as np
-from typing import List, Dict, Optional
+from typing import Any, List, Dict, Optional
 
-from utils import load_embedding_model, load_reranker_model
+from utils import (
+    load_embedding_model,
+    load_reranker_model,
+    split_text_recursive,
+    resolve_split_params,
+    MAX_CHUNK_CHARS,
+    DEFAULT_OVERLAP_CHARS,
+)
 from novel_context import chapter_aggregate_rerank
 
 
@@ -50,6 +57,11 @@ class RAGRetriever:
         self.embedding_model = None
         self._embedding_loaded = False
         self._reranker_loaded = False
+        # 向量检索状态（供 UI/CLI 提示用户；空字符串=向量检索正常参与）
+        self.last_vector_status = ""
+        self.last_fusion_mode = ""
+        # 本次实际参与召回的查询列表（首项为原查询，其余为改写查询）
+        self.last_retrieval_queries: List[str] = []
 
         self.load_documents()
         self._load_embedding_model()
@@ -366,21 +378,17 @@ class RAGRetriever:
         except Exception as e:
             print(f"  ⚠ 加载文本文件失败: {e}")
 
-    def _split_into_chunks(self, text: str, chunk_size: int = 500) -> List[str]:
-        """将文本分割成块（仅用于旧格式 txt 目录加载）"""
-        chunks = []
-        paragraphs = re.split(r'\n\s*\n', text)
-        current_chunk = ""
-        for para in paragraphs:
-            if len(current_chunk) + len(para) > chunk_size:
-                if current_chunk:
-                    chunks.append(current_chunk)
-                current_chunk = para
-            else:
-                current_chunk += "\n" + para if current_chunk else para
-        if current_chunk:
-            chunks.append(current_chunk)
-        return chunks
+    def _split_into_chunks(self, text: str, chunk_size: int = MAX_CHUNK_CHARS) -> List[str]:
+        """将文本分割成块（仅用于旧格式 txt 目录加载）
+
+        与建库切片口径保持一致：调用 utils.split_text_recursive
+        （不足 200 字符不切 / 超 200 遇 。！：？ 即切 / 512 无标点强制切 /
+        相邻片段 50 字符重叠），避免旧 txt 目录的块粒度与向量库不一致。
+        """
+        min_chars, max_chars, overlap_chars = resolve_split_params(
+            chunk_size, DEFAULT_OVERLAP_CHARS
+        )
+        return split_text_recursive(text, min_chars, max_chars, overlap_chars)
 
     # ===================== 检索 =====================
 
@@ -393,21 +401,45 @@ class RAGRetriever:
         """
         检索相关文档（混合召回 + 可选精排）
 
-        阶段1: 混合召回
-            - 向量召远 (top_k*5)
-            - 关键词召远 (top_k*5)
-            - RRF 融合（k=60）→ 取 top_k*3
-        阶段2: 精排（仅在 enable_rerank=True 且 reranker_model 已加载时）
-            - CrossEncoder 重排所有候选
-            - 按 rerank score 降序排
-        阶段3: 章节聚合重排
-            - 同章去重、取每章最高分
-            - 截断 top_k
+        等价于 `retrieve_multi(question, extra_queries=None, ...)`，
+        单查询行为与历史版本完全一致（向量 + 关键词两路 RRF 融合）。
 
         Args:
             question: 查询问题
             top_k: 返回的 top K 结果数
             enable_rerank: 是否启用 CrossEncoder 精排
+
+        Returns:
+            相关文档列表，每项包含 {text, score, chapter, chunk_id, file}
+        """
+        return self.retrieve_multi(
+            question, extra_queries=None, top_k=top_k,
+            enable_rerank=enable_rerank,
+        )
+
+    def retrieve_multi(
+        self,
+        question: str,
+        extra_queries: Optional[List[str]] = None,
+        top_k: int = 3,
+        enable_rerank: bool = False,
+        max_extra_queries: int = 3,
+    ) -> List[Dict]:
+        """
+        检索相关文档（多路召回：原查询 + 各改写查询）
+
+        与 retrieve() 的差异只在阶段1：原查询与每条附加查询（查询改写的产物）
+        「各作一路召回」——每路查询都产出「向量有序列表 + 关键词有序列表」，
+        所有有序列表统一走 RRF 多路融合（沿用 k=60）；
+        阶段2（可选 CrossEncoder 精排）与阶段3（章节聚合 + top_k 截断）不分叉，
+        与单查询路径完全一致。
+
+        Args:
+            question: 查询问题（原查询，始终参与召回）
+            extra_queries: 附加查询列表（如 ["陈曦的姓名"]）；None/空 → 单查询
+            top_k: 返回的 top K 结果数
+            enable_rerank: 是否启用 CrossEncoder 精排
+            max_extra_queries: 附加查询数量上限（防改写产物过多拖慢检索）
 
         Returns:
             相关文档列表，每项包含 {text, score, chapter, chunk_id, file}
@@ -419,22 +451,63 @@ class RAGRetriever:
         start_time = time.time()
         candidate_pool_size = top_k * 5  # 召远阶段取多一些
         rerank_input_size = top_k * 3    # 精排阶段最多这么多 pair
+        queries = self._merge_queries(question, extra_queries, max_extra_queries)
 
-        # ---------- 阶段1: 混合召远（RRF） ----------
-        vec_results: List[Dict] = []
-        if self.embedding_model is not None and isinstance(self.embeddings, np.ndarray) and self.embeddings.ndim == 2:
-            vec_results = self._vector_retrieve(question, candidate_pool_size)
-        kw_results: List[Dict] = self._keyword_retrieve(question, candidate_pool_size)
-
-        if vec_results and kw_results:
-            fused = self._rrf_fusion(vec_results, kw_results, k=60)
-            fusion_mode = "RRF（向量+关键词）"
-        elif vec_results:
-            fused = vec_results
-            fusion_mode = "仅向量"
+        # ---------- 阶段1: 混合召远（多路 RRF） ----------
+        # 判断向量通道是否就绪：嵌入模型可用 且 向量库为二维数组
+        vec_ready = (
+            self.embedding_model is not None
+            and isinstance(self.embeddings, np.ndarray)
+            and self.embeddings.ndim == 2
+        )
+        if not vec_ready:
+            if self.embedding_model is None:
+                self.last_vector_status = "嵌入模型不可用，本次未使用向量检索（仅关键词模式）"
+            else:
+                self.last_vector_status = "向量库不可用（非二维向量），本次未使用向量检索（仅关键词模式）"
         else:
-            fused = kw_results
-            fusion_mode = "仅关键词"
+            self.last_vector_status = ""
+
+        # 每路查询各产出一个向量有序列表与一个关键词有序列表
+        vec_lists: List[List[Dict]] = []
+        kw_lists: List[List[Dict]] = []
+        for query in queries:
+            vec_results = (
+                self._vector_retrieve(query, candidate_pool_size)
+                if vec_ready else []
+            )
+            kw_results = self._keyword_retrieve(query, candidate_pool_size)
+            if vec_results:
+                vec_lists.append(vec_results)
+            if kw_results:
+                kw_lists.append(kw_results)
+
+        # 多查询时在融合模式上追加标注（不影响单查询的历史文案）
+        multi_suffix = "" if len(queries) == 1 else f"（多查询×{len(queries)}）"
+
+        if vec_lists and kw_lists:
+            # 融合顺序：先各查询的向量列表，再各查询的关键词列表
+            # （单查询时即 [向量, 关键词]，与历史顺序一致）
+            fused = self._rrf_fusion_multi(vec_lists + kw_lists, k=60)
+            fusion_mode = f"RRF（向量+关键词）{multi_suffix}"
+        elif vec_lists:
+            fused = (vec_lists[0] if len(vec_lists) == 1
+                     else self._rrf_fusion_multi(vec_lists, k=60))
+            fusion_mode = f"仅向量{multi_suffix}"
+        else:
+            fused = (kw_lists[0] if len(kw_lists) == 1
+                     else self._rrf_fusion_multi(kw_lists, k=60)) if kw_lists else []
+            fusion_mode = f"仅关键词{multi_suffix}"
+            if vec_ready:
+                # 向量通道就绪但未产出结果：要么执行异常，要么全部低于相似度阈值
+                err = getattr(self, '_last_vector_error', '')
+                hint = f"向量检索未产出有效结果（{err if err else '相似度全部低于阈值 0.1'}），本次未使用向量检索（仅关键词模式）"
+                self.last_vector_status = hint
+
+        self.last_fusion_mode = fusion_mode
+        self.last_retrieval_queries = list(queries)  # 供 UI/CLI 展示实际召回用查询
+        if self.last_vector_status:
+            print(f"⚠ {self.last_vector_status}")
 
         # 截断到精排输入大小
         candidates = fused[:rerank_input_size]
@@ -455,6 +528,24 @@ class RAGRetriever:
         )
         return final_results
 
+    @staticmethod
+    def _merge_queries(
+        question: str,
+        extra_queries: Optional[List[str]] = None,
+        max_extra_queries: int = 3,
+    ) -> List[str]:
+        """合并原查询与改写查询：去空、去重、限流（原查询恒为第一路）"""
+        queries: List[str] = [question]
+        for extra in (extra_queries or []):
+            if not isinstance(extra, str):
+                continue
+            extra = extra.strip()
+            if extra and extra not in queries:
+                queries.append(extra)
+            if len(queries) > max_extra_queries + 1:
+                break
+        return queries[: max_extra_queries + 1]
+
     def _rrf_fusion(
         self,
         vec_results: List[Dict],
@@ -462,28 +553,46 @@ class RAGRetriever:
         k: int = 60
     ) -> List[Dict]:
         """
-        Reciprocal Rank Fusion（倒数排名融合）。
+        Reciprocal Rank Fusion（两路兼容签名）。
 
-        对每个召远器，文档 d 的 RRF 分数 = 1 / (k + rank(d))，
-        最终分数 = 各召远器 RRF 分数之和。常数 k=60 为论文推荐值。
-
-        同一文档可能被两个召远器都返回，按 chunk_id 去重合并。
+        等价于 `_rrf_fusion_multi([vec_results, kw_results], k)`，
+        保留旧签名以兼容既有调用方与测试。
         """
-        scores: Dict[int, float] = {}
-        docs: Dict[int, Dict] = {}
+        return self._rrf_fusion_multi([vec_results, kw_results], k=k)
 
-        for rank, doc in enumerate(vec_results):
-            cid = doc.get('chunk_id', id(doc))
-            scores[cid] = scores.get(cid, 0.0) + 1.0 / (k + rank + 1)
-            docs[cid] = doc
+    @staticmethod
+    def _rrf_fusion_multi(
+        ranked_lists: List[List[Dict]],
+        k: int = 60
+    ) -> List[Dict]:
+        """
+        Reciprocal Rank Fusion（多路版）。
 
-        for rank, doc in enumerate(kw_results):
-            cid = doc.get('chunk_id', id(doc))
-            scores[cid] = scores.get(cid, 0.0) + 1.0 / (k + rank + 1)
-            if cid not in docs:
-                docs[cid] = doc
+        对每个召回列表，文档 d 的 RRF 分数 = 1 / (k + rank(d))，
+        最终分数 = 各列表 RRF 分数之和。常数 k=60 为论文推荐值。
+        同一文档（按 chunk_id 去重）在多个列表中命中则分数累加——
+        即「原查询和改写查询同时召回」的片段会被显著提升，这正是
+        查询改写想要的效果。
 
-        # 按 RRF 分数降序排
+        Args:
+            ranked_lists: 多个有序召回列表（如 [向量_原查询, 关键词_原查询,
+                          向量_改写1, 关键词_改写1, ...]）
+            k: RRF 平滑常数
+
+        Returns:
+            融合后的文档列表（按 RRF 分数降序，score 为融合分）
+        """
+        scores: Dict[Any, float] = {}
+        docs: Dict[Any, Dict] = {}
+
+        for ranked in ranked_lists:
+            for rank, doc in enumerate(ranked or []):
+                cid = doc.get('chunk_id', id(doc))
+                scores[cid] = scores.get(cid, 0.0) + 1.0 / (k + rank + 1)
+                if cid not in docs:
+                    docs[cid] = doc
+
+        # 按 RRF 分数降序排（stable：同分保持首次出现顺序）
         sorted_cids = sorted(scores.keys(), key=lambda x: -scores[x])
         fused: List[Dict] = []
         for cid in sorted_cids:
@@ -599,8 +708,9 @@ class RAGRetriever:
             return results
 
         except Exception as e:
+            self._last_vector_error = str(e)
             print(f"⚠ 向量检索失败: {e}，回退到关键词检索")
-            return self._keyword_retrieve(question, top_k)
+            return []
 
     def get_stats(self) -> Dict:
         """获取检索器统计信息"""

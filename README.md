@@ -5,11 +5,11 @@
 ![License](https://img.shields.io/badge/License-MIT-green)
 
 > **NovelRAG** 是一个面向中文小说语料的 **RAG（Retrieval-Augmented Generation）端到端应用**：
-> 从 txt / epub 原文出发，自动完成「编码修复 → 文本清洗 → 句子级滑动窗口切片 → 本地嵌入向量化 →
+> 从 txt / epub 原文出发，自动完成「编码修复 → 文本清洗 → 标点优先递归切片 → 本地嵌入向量化 →
 > 语义检索 → Prompt 组装（含多轮上下文）→ LLM 生成」，并内置多项目管理、向量库导入与聊天日志。
 
 **English abstract**: A desktop RAG application for Chinese novels, covering the full offline pipeline —
-encoding repair, rule-based text cleaning, sentence-level sliding-window chunking, local embedding,
+encoding repair, rule-based text cleaning, punctuation-first recursive chunking, local embedding,
 cosine semantic retrieval (with keyword fallback), prompt templating with multi-turn context, and an
 OpenAI-compatible LLM backend. Supports both .txt and .epub input. No cloud dependency for indexing; all corpora stay local.
 
@@ -20,7 +20,7 @@ OpenAI-compatible LLM backend. Supports both .txt and .epub input. No cloud depe
 - 📚 **多项目管理**：创建 / 切换 / 删除多个小说项目，支持导入已有向量库（.npy + .json）
 - 📖 **多格式支持**：`.txt` 和 `.epub` 一键导入；epub 自动提取章节文本并转为纯文本走清洗管线，支持导入已有向量库（.npy + .json）
 - 🧹 **可插拔文本清洗**：6 种规则（去除广告水印、页码、拼音残留、修复 GBK 编码错字等），支持自定义脏词
-- 📝 **句子级智能切片**：以句子为单位 + 重叠窗口滑动切分，避免切断语义
+- 📝 **标点优先递归切片**：不足 200 字符不切分；超过 200 字符遇到句号/感叹号/冒号/问号即切片；超过 512 字符仍无上述标点则强制切片；相邻片段保留 50 字符重叠
 - 🔍 **混合召回 + 精排**：向量语义召回 + 关键词召回经 RRF（倒数排名融合）合并，可选 CrossEncoder 重排进一步提升精度；未配置嵌入模型时自动回退纯关键词检索，功能不瘫痪
 - 💬 **多轮对话**：手动拼接最近上下文 + 轮数上限，防止上下文膨胀与接口超时
 - ⚙️ **Prompt 模板外置**：可编辑系统提示，强制模型「仅依据原文、禁止编造」
@@ -55,7 +55,7 @@ flowchart LR
 |---|---|
 | 界面 | customtkinter / tkinter |
 | 文本清洗 | 正则 + 中文网文脏数据映射表（GBK 错字、水印广告、拼音残留） |
-| 切片策略 | 句子滑动窗口 + 重叠（`split_text_by_sentences`） |
+| 切片策略 | 标点优先递归切片（`split_text_recursive`）：不足 200 字符不切 · 超 200 遇 。！：？ 即切 · 512 无标点强制切 · 相邻 50 字符重叠 |
 | 嵌入模型 | sentence-transformers（本地推理，可选；支持 HF 模型名自动下载） |
 | 混合召回 | numpy 余弦相似度 + 关键词匹配 + RRF 融合（无重依赖、跨平台） |
 | 精排 | sentence-transformers CrossEncoder（bge-reranker-base，可选，GPU 加速） |
@@ -303,7 +303,7 @@ epub 格式加载与 HTML 标签剥离。
 ## 🗺️ Roadmap
 
 - [x] 多项目管理 + 向量库导入
-- [x] 文本清洗、句子级切片、向量化与检索
+- [x] 文本清洗、标点优先递归切片、向量化与检索
 - [x] 多轮对话与 Prompt 模板外置
 - [x] CLI 一键管线（novel_rag.py：ingest / ask / chat / list / demo）
 - [x] epub 格式支持（format_loader.py，懒加载 ebooklib + BeautifulSoup）

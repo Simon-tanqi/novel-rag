@@ -42,7 +42,7 @@ class ProjectWizard(ctk.CTkToplevel):
         # 状态变量
         self.project_name = ctk.StringVar()
         self.source_path = ctk.StringVar()
-        self.chunk_size = ctk.IntVar(value=500)
+        self.chunk_size = ctk.IntVar(value=512)
         self.overlap = ctk.IntVar(value=50)
         self.is_processing = False
 
