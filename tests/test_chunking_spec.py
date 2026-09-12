@@ -84,11 +84,14 @@ class TestPunctBoundaryCut:
             assert chunks[0] == text[:211], f"标点 {punct} 未触发切分"
             assert chunks[0].endswith(punct)
 
-    def test_other_punct_does_not_trigger(self):
-        """逗号/分号/顿号不在规格标点集合内，不应触发切分"""
+    def test_secondary_punct_triggers_fallback_cut(self):
+        """逗号/分号/顿号属二级边界：一级标点缺失时降级切分（原实现整段硬切）"""
         text = "啊" * 205 + "，" + "呀" * 5 + "；" + "嘿" * 5 + "、" + "哈" * 100
         chunks = split_text_recursive(text, 200, 512, 50)
-        assert chunks == [text]
+        assert len(chunks) >= 2, "二级边界未触发降级切分"
+        assert chunks[0].endswith("，"), "未在首个二级标点后切分"
+        assert chunks[-1].endswith("哈"), "尾块未覆盖原文末尾"
+        assert all(len(c) <= MAX_CHUNK_CHARS for c in chunks)
 
 
 # ===================== 规则 3：超过 max_chars 无标点强制切 =====================

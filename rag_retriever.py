@@ -25,9 +25,8 @@ from utils import (
     load_embedding_model,
     load_reranker_model,
     split_text_recursive,
-    resolve_split_params,
+    resolve_split_spec,
     MAX_CHUNK_CHARS,
-    DEFAULT_OVERLAP_CHARS,
 )
 from novel_context import chapter_aggregate_rerank
 
@@ -399,17 +398,45 @@ class RAGRetriever:
         except Exception as e:
             print(f"  ⚠ 加载文本文件失败: {e}")
 
+    def _load_split_spec(self, chunk_size: Optional[int] = None) -> Dict:
+        """读取切片规格（建库 / 检索同口径）。
+
+        优先级：向量库落盘的 split_spec.json（建库时实际生效的规格）>
+        chunk_size 入参 > utils 规格默认值（min 200 / target 400 / max 512 /
+        重叠 max(50, 前块 15%)）。老向量库无 split_spec.json 时自动回落默认，
+        行为与改造前一致。
+        """
+        disk_spec: Dict = {}
+        try:
+            if self.vector_path and os.path.isdir(self.vector_path):
+                spec_path = os.path.join(self.vector_path, "split_spec.json")
+                if os.path.isfile(spec_path):
+                    with open(spec_path, "r", encoding="utf-8") as f:
+                        loaded = json.load(f)
+                    if isinstance(loaded, dict):
+                        disk_spec = loaded
+        except (OSError, ValueError):
+            disk_spec = {}
+
+        return resolve_split_spec(
+            chunk_size if chunk_size is not None else disk_spec.get("max_chars"),
+            disk_spec.get("overlap_chars"),
+            disk_spec.get("target_chars"),
+            disk_spec.get("overlap_ratio"),
+        )
+
     def _split_into_chunks(self, text: str, chunk_size: int = MAX_CHUNK_CHARS) -> List[str]:
         """将文本分割成块（仅用于旧格式 txt 目录加载）
 
-        与建库切片口径保持一致：调用 utils.split_text_recursive
-        （不足 200 字符不切 / 超 200 遇 。！：？ 即切 / 512 无标点强制切 /
-        相邻片段 50 字符重叠），避免旧 txt 目录的块粒度与向量库不一致。
+        与建库切片口径保持一致：优先取向量库 split_spec.json 的实际规格
+        （不足 200 字符不切 / 目标 400 字符并在 。！：？ 处切 / 512 无标点强制切 /
+        相邻片段重叠 max(50, 前块 15%)），避免旧 txt 目录的块粒度与向量库不一致。
         """
-        min_chars, max_chars, overlap_chars = resolve_split_params(
-            chunk_size, DEFAULT_OVERLAP_CHARS
+        spec = self._load_split_spec(chunk_size)
+        return split_text_recursive(
+            text, spec["min_chars"], spec["max_chars"], spec["overlap_chars"],
+            target_chars=spec["target_chars"], overlap_ratio=spec["overlap_ratio"],
         )
-        return split_text_recursive(text, min_chars, max_chars, overlap_chars)
 
     # ===================== 分层上下文扩展 =====================
 

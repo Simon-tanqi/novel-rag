@@ -48,6 +48,9 @@ def assemble_context(hits, top_k=None):
     - 无分层扩展字段（老向量库 / 未扩展）时，输出与改造前逐字节一致：
       每命中一个块输出一段 ``[来源:章节]\\n正文``，段间以 ``\\n\\n---\\n\\n`` 连接。
     - 存在父块/邻居时，按章节聚合为块，章节内先命中、再父块、再邻居。
+    - 同章节内按「文本包含关系」去重：父块由子块原文拼接而成，若父块已输出，
+      其覆盖的子块不再重复输出；新项更长且包含已保留项时就地替换，避免
+      父子块文本重复导致上下文膨胀。
 
     Args:
         hits: retrieve()/retrieve_multi() 返回的文档列表
@@ -87,14 +90,29 @@ def assemble_context(hits, top_k=None):
     blocks = []
     for chapter in chapter_seq:
         items = sorted(buckets[chapter], key=lambda d: order[_kind(d)])
-        seen_text = set()
-        lines = []
+        # 同章节内做「文本包含关系」去重：
+        # - 父块由同章连续子块原文拼接而成，必然包含其子块文本 —— 若已保留
+        #   更长的父块，则被包含的子块不再重复输出（消除命中/父块重复膨胀）；
+        # - 反之若新项更长且包含已保留项，则就地替换（位次不变），以更全的
+        #   父块文本为准，避免上下文被切碎重复。
+        kept = []  # [(text, item), ...]
         for item in items:
             text = item.get("text", "")
-            if not text or text in seen_text:
+            if not text:
                 continue
-            seen_text.add(text)
-            lines.append(f"[{label[_kind(item)]}:{chapter}]\n{text}")
+            redundant = False
+            for i, (kept_text, _) in enumerate(kept):
+                if text == kept_text or text in kept_text:
+                    redundant = True
+                    break
+                if kept_text in text:
+                    kept[i] = (text, item)  # 就地替换为更完整的文本
+                    redundant = True
+                    break
+            if redundant:
+                continue
+            kept.append((text, item))
+        lines = [f"[{label[_kind(it)]}:{chapter}]\n{t}" for t, it in kept]
         if lines:
             blocks.append("\n\n".join(lines))
     return "\n\n---\n\n".join(blocks) if blocks else "未找到相关的原文片段。"

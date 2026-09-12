@@ -41,7 +41,7 @@ from rag_retriever import RAGRetriever
 from format_loader import is_supported_format, load_raw_text
 from step1_clean import RULE_FUNCTIONS, clean_file
 from step2_split_embed import build_vector_index_from_file
-from utils import DEFAULT_EMBEDDING_MODEL, load_env_file
+from utils import DEFAULT_EMBEDDING_MODEL, load_env_file, resolve_split_spec
 
 # 最先加载项目根目录 .env（幂等，仅补未设置键）
 load_env_file()
@@ -215,6 +215,16 @@ def cmd_ingest(args) -> None:
 
     # 3) 切片 + 向量化
     print("③ 切片与向量化 ...")
+    # 切片规格唯一出口（utils.resolve_split_spec）：打印实际生效值，避免
+    # 历史上「文档承诺 400/15% 而实际跑 512/50」的对账失配再次发生。
+    spec = resolve_split_spec(
+        args.chunk_size, args.overlap,
+        getattr(args, "target_chars", None), getattr(args, "overlap_ratio", None),
+    )
+    print(
+        "   切片规格: 最小切分 {min_chars} / 目标 {target_chars} / 上限 {max_chars} / "
+        "重叠 max({overlap_chars}, 前块×{overlap_ratio})".format(**spec)
+    )
     # 嵌入模型优先级：--embedding 参数 > config/环境变量/内置默认。
     # 显式传空串（--embedding "" / demo 场景）表示强制纯关键词模式，不下载模型。
     if args.embedding is not None:
@@ -229,6 +239,8 @@ def cmd_ingest(args) -> None:
         output_dir=vector_db_path,
         embedding_model_path=embedding if embedding else None,
         progress_callback=_print_progress,
+        target_chars=getattr(args, "target_chars", None),
+        overlap_ratio=getattr(args, "overlap_ratio", None),
     )
     if not ok:
         print("✗ 向量化失败")
@@ -545,7 +557,15 @@ def build_parser() -> argparse.ArgumentParser:
     p_ingest.add_argument("file", help="小说文件路径（.txt 或 .epub）")
     p_ingest.add_argument("--name", help="项目名（默认取文件名）")
     p_ingest.add_argument("--chunk-size", type=int, default=512, help="切片硬上限（字符数，默认 512）")
-    p_ingest.add_argument("--overlap", type=int, default=50, help="相邻片段重叠字符数（默认 50）")
+    p_ingest.add_argument("--overlap", type=int, default=50, help="相邻片段重叠字符数下限（默认 50）")
+    p_ingest.add_argument(
+        "--target-chars", type=int, default=None,
+        help="目标块长（字符数，默认 400；裁剪进 [200,512]，窗口内优先选最接近该长度的标点）",
+    )
+    p_ingest.add_argument(
+        "--overlap-ratio", type=float, default=None,
+        help="相邻片段重叠比例（默认 0.15；实际重叠 = max(--overlap, 前块长度 × 比例)）",
+    )
     p_ingest.add_argument("--embedding", help="嵌入模型：本地目录路径 或 HF 模型名（默认 bge-small-zh-v1.5）")
     p_ingest.add_argument("--rules", nargs="*", help="清洗规则子集（默认全部规则）")
     p_ingest.add_argument("--words", nargs="*", help="自定义脏词（用于去除广告规则）")

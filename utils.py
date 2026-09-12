@@ -336,15 +336,69 @@ CHAPTER_PATTERNS = [
 CHAPTER_RE = re.compile("|".join(f"(?:{p})" for p in CHAPTER_PATTERNS))
 
 
-def _is_chapter_line(line: str) -> bool:
-    """判断一行是否像章节标题（行首匹配，且行内无句读）"""
+# 章节标题最大长度（超长行一律判为正文）
+MAX_TITLE_CHARS = 32
+
+# 中文数字字符与位值（章节序号解析用）
+_CN_DIGITS = {"零": 0, "〇": 0, "一": 1, "二": 2, "两": 2, "三": 3, "四": 4,
+              "五": 5, "六": 6, "七": 7, "八": 8, "九": 9}
+_CN_UNITS = {"十": 10, "百": 100, "千": 1000}
+
+
+def is_chapter_title(line: str) -> bool:
+    """章节标题判定的唯一权威实现（step1_clean / novel_context 均转调此处）。
+
+    判定条件：
+    1. 行长 ≤ MAX_TITLE_CHARS(32)：标题行不会很长；
+    2. 行首匹配「第X章 / 序章 / 楔子 / 番外 …」（见 CHAPTER_PATTERNS）；
+    3. 行内不含句号「。」。
+
+    注意：网文标题常以「！」「？」结尾，也可能用逗号分组
+    （如「第147章 赵家，雷家！」），故显式放行 ！？，、；。
+    旧实现把这些标点一律当句末标点排除，会吞掉绝大多数标题行
+    （《绝世主宰》1029 章中 1013 章被判为正文），是结构坍塌的根因。
+    """
     stripped = line.strip()
-    if not stripped or len(stripped) > 60:
+    if not stripped or len(stripped) > MAX_TITLE_CHARS:
         return False
-    # 标题行不应包含句末标点（避免把正文行误判为标题）
-    if re.search(r'[。！？；…]', stripped):
+    if "。" in stripped:
         return False
     return bool(CHAPTER_RE.match(stripped))
+
+
+def _is_chapter_line(line: str) -> bool:
+    """（兼容保留）章节标题判定，转调 is_chapter_title。"""
+    return is_chapter_title(line)
+
+
+def _cn_to_int(raw: str) -> Optional[int]:
+    """中文数字转整数（支持 十/百/千/万 组合，如「一千零二十八」→ 1028）。"""
+    total = 0    # 万级累计
+    section = 0  # 当前小节累计
+    num = 0      # 待入位的末位数字
+    for ch in raw:
+        if ch in _CN_DIGITS:
+            num = _CN_DIGITS[ch]
+        elif ch in _CN_UNITS:
+            section += (num if num else 1) * _CN_UNITS[ch]
+            num = 0
+        elif ch == "万":
+            section = (section + num) * 10000
+            total += section
+            section = 0
+            num = 0
+        else:
+            return None
+    return total + section + num
+
+
+def parse_chapter_number(title: str) -> Optional[int]:
+    """解析章节标题中的序号；无序号标题（序章/楔子/番外）返回 None。"""
+    m = re.match(r'^\s*第\s*([零〇一二三四五六七八九十百千万两\d]+)\s*[章节回卷部集篇话]', title)
+    if not m:
+        return None
+    raw = m.group(1)
+    return int(raw) if raw.isdigit() else _cn_to_int(raw)
 
 
 def _find_chapter_boundaries(text: str):
@@ -352,11 +406,26 @@ def _find_chapter_boundaries(text: str):
     定位章节边界，返回 [(start, end, title), ...]。
 
     - 把含章节标题的连续行（标题行 + 紧邻的装饰行）归入同一章节头；
-    - 相邻标题行间隔 ≤3 行视为同一章节头（如“第X章 标题”下一行紧跟“===”）；
+    - 相邻标题行间隔 ≤1 行视为同一章节头（如“第X章 标题”下一行紧跟“===”）；
+      间隔 ≥2 行的独立标题行不合并（避免把 1 行正文误并进章节头），
+      该阈值由下方「idx - cur[-1] <= 1」唯一实现，文档与代码保持同口径；
+    - 标题行下方紧邻的短装饰行（≤20 字且不含句末标点）并入标题文本；
     - 最后一个标题到文本末尾为最后一章。
     """
     lines = text.split('\n')
-    title_indices = [i for i, line in enumerate(lines) if _is_chapter_line(line)]
+    candidates = [i for i, line in enumerate(lines) if _is_chapter_line(line)]
+    # 章节序号连续性兜底：正文中引用章节的句子（如「他在第三章提过」）也可能
+    # 命中标题模式，但序号通常「回退」。按出现顺序扫描，剔除序号逆序的候选；
+    # 无序号标题（序章/楔子/番外）不参与校验，也不会被剔除。
+    title_indices = []
+    last_num = 0
+    for i in candidates:
+        num = parse_chapter_number(lines[i])
+        if num is not None:
+            if num < last_num:
+                continue
+            last_num = num
+        title_indices.append(i)
     if not title_indices:
         return []
 
@@ -389,14 +458,19 @@ def _find_chapter_boundaries(text: str):
 
 
 # ===================== 分片规格（递归切片） =====================
-# 1) 距上次切分点不足 MIN_CHUNK_CHARS 字符 → 不再切分，剩余作为尾块；
-# 2) 超过 MIN_CHUNK_CHARS → 向后寻找句末标点，命中即在其后切分；
-# 3) 距上次切分点超过 MAX_CHUNK_CHARS 仍无标点 → 强制切分；
-# 4) 相邻片段保留 DEFAULT_OVERLAP_CHARS 字符重叠。
+# 规格（优先级从高到低，split_text_recursive 唯一实现）：
+# 0) MIN_CHUNK_CHARS 是最优先硬约束：距上次切分点不足 200 字符 →
+#    即使遇到句末标点也不切分，剩余整体作为尾块；
+# 1) 达到 200 字符后进入可切区间：在 (上次切分点, 上次切分点+200] 之后、
+#    512 字符之前，遇到一级标点 。！：？ → 在其后切分；给定 target_chars
+#    时优先挑最接近 400 字符的标点，避免块长全部极化到上限；
+# 2) 距上次切分点超过 MAX_CHUNK_CHARS(512) 仍无一级标点 → 依次降级
+#    二级（；：，、）/ 三级（空白）/ 四级硬切兜底；
+# 3) 相邻片段重叠 = max(DEFAULT_OVERLAP_CHARS, 前块长度 × OVERLAP_RATIO)。
 MIN_CHUNK_CHARS = 200
 MAX_CHUNK_CHARS = 512
 DEFAULT_OVERLAP_CHARS = 50
-# 命中即切片的标点集合：句号、感叹号、冒号、问号
+# 触发切分的一级标点集合（句号、感叹号、冒号、问号）
 CHUNK_BOUNDARY_PUNCT = ("。", "！", "：", "？")
 
 
@@ -424,19 +498,75 @@ def resolve_split_params(chunk_size=None, overlap=None):
     return min_chars, max_chars, max(0, ov)
 
 
+def resolve_split_spec(chunk_size=None, overlap=None,
+                       target_chars=None, overlap_ratio=None) -> dict:
+    """分层切片完整规格：切片参数的唯一出口（建库 / 检索 / CLI / GUI 均经此）。
+
+    Args:
+        chunk_size: 硬上限覆盖值；仅当落在 [MIN_CHUNK_CHARS, MAX_CHUNK_CHARS]
+            区间内才生效，否则回落 MAX_CHUNK_CHARS（避免超出模型 512 上下文）。
+        overlap: 重叠下限（字符）覆盖值；None → DEFAULT_OVERLAP_CHARS。
+        target_chars: 目标块长覆盖值；None → TARGET_CHUNK_CHARS(400)。
+            取 min(max(min_chars, 目标值), max_chars)，保证落在 [min, max] 内。
+        overlap_ratio: 重叠比例覆盖值；None → OVERLAP_RATIO(0.15)，
+            取值裁剪到 [0, 0.5]，避免重叠吞掉整块。
+
+    Returns:
+        {
+            "min_chars": 200,        # 最小切分距离（硬优先级：不足不切分）
+            "max_chars": 512,        # 硬上限
+            "overlap_chars": 50,     # 重叠下限
+            "target_chars": 400,     # 目标块长（未接线前长期失效，现由本函数统一发放）
+            "overlap_ratio": 0.15,   # 重叠比例
+        }
+
+    说明：min_chars 是**最优先约束**——距上次切分点不足 min_chars 时，
+    即使遇到句末标点也不切分；只有落在 [min_chars, max_chars] 区间内的
+    一级标点（。！：？）才触发切分，超过 max_chars 无标点则硬切兜底。
+    """
+    min_chars, max_chars, overlap_chars = resolve_split_params(chunk_size, overlap)
+
+    # 目标长度：显式入参优先（CLI --target-chars），否则用规格常量；始终裁剪进 [min, max]
+    try:
+        tgt = int(target_chars) if target_chars is not None else TARGET_CHUNK_CHARS
+    except (TypeError, ValueError):
+        tgt = TARGET_CHUNK_CHARS
+    target_chars = min(max(min_chars, tgt), max_chars)
+
+    # 重叠比例：显式入参优先（CLI --overlap-ratio），裁剪到 [0, 0.5]
+    try:
+        ratio = float(overlap_ratio) if overlap_ratio is not None else OVERLAP_RATIO
+    except (TypeError, ValueError):
+        ratio = OVERLAP_RATIO
+    ratio = min(max(0.0, ratio), 0.5)
+
+    return {
+        "min_chars": min_chars,
+        "max_chars": max_chars,
+        "overlap_chars": overlap_chars,
+        "target_chars": target_chars,
+        "overlap_ratio": ratio,
+    }
+
+
 def split_text_recursive(
     text: str,
     min_chars: int = MIN_CHUNK_CHARS,
     max_chars: int = MAX_CHUNK_CHARS,
-    overlap_chars: int = DEFAULT_OVERLAP_CHARS
+    overlap_chars: int = DEFAULT_OVERLAP_CHARS,
+    target_chars: Optional[int] = None,
+    overlap_ratio: Optional[float] = None
 ) -> List[str]:
     """按规格切片：标点优先 + 硬上限 + 字符重叠。
 
     规则：
     1. 距上次切分点不足 min_chars → 不切分，剩余整体作为尾块；
     2. 超过 min_chars 后寻找 。！：？ → 命中即在其后切分；
-    3. 距上次切分点超过 max_chars 仍无上述标点 → 在 max_chars 处强制切分；
-    4. 相邻片段保留 overlap_chars 字符重叠。
+       指定 target_chars 时，改为在窗口内挑「最接近目标长度」的标点，
+       避免所有块长都极化到 max_chars；
+    3. 一级标点未命中 → 依次降级二级（；：，、）→ 三级（空白）→ 四级硬切；
+    4. 相邻片段重叠：给定 overlap_ratio 时取
+       max(overlap_chars, 前块长度 × overlap_ratio)，否则固定 overlap_chars。
 
     切分只做位置裁剪、不改写任何字符（标点/换行原样保留），
     因此 chunk 文本与原文一致，可安全用于引用溯源。
@@ -445,7 +575,9 @@ def split_text_recursive(
         text: 输入文本
         min_chars: 最小切分距离（不足不切分）
         max_chars: 无标点时的强制切分距离（硬上限）
-        overlap_chars: 相邻片段重叠字符数
+        overlap_chars: 相邻片段重叠字符数（重叠下限）
+        target_chars: 目标块长（给定时按目标择优切分点，None 保持原行为）
+        overlap_ratio: 重叠比例（给定时按前块长度动态计算重叠）
 
     Returns:
         文本块列表
@@ -459,6 +591,9 @@ def split_text_recursive(
         overlap_chars = 0  # 重叠不得吞掉整块，避免原地重复切分
 
     punct = set(CHUNK_BOUNDARY_PUNCT)
+    target = int(target_chars) if target_chars else 0
+    if target:
+        target = min(max(target, min_chars), max_chars)
     n = len(text)
     chunks: List[str] = []
     start = 0
@@ -475,12 +610,38 @@ def split_text_recursive(
         window_end = min(n, start + max_chars)
         scan_from = max(start + min_chars, last_cut)
         cut = -1
-        for i in range(scan_from, window_end):
-            if text[i] in punct:
-                cut = i + 1  # 标点归入前一块
-                break
+        if target:
+            # 目标长度优先：窗口内挑最接近 target 的一级标点（同级边界择优）。
+            # 用 str.find/rfind 在窗口内定位（C 级实现），避免逐字符 Python 循环。
+            aim = min(max(start + target, scan_from), window_end)
+            right, left = -1, -1
+            for p in punct:
+                i = text.find(p, aim, window_end)
+                if i != -1 and (right == -1 or i < right):
+                    right = i
+                j = text.rfind(p, scan_from, aim)
+                if j != -1 and j > left:
+                    left = j
+            if right != -1 and (left == -1 or (right - aim) <= (aim - left)):
+                cut = right + 1
+            elif left != -1:
+                cut = left + 1
+        else:
+            cut = -1
+            for p in punct:
+                i = text.find(p, scan_from, window_end)
+                if i != -1 and (cut == -1 or i + 1 < cut):
+                    cut = i + 1
         if cut < 0:
-            cut = window_end  # 无标点：强制切分（或已到文本末尾）
+            # 一级边界未命中 → 二级（；：，、）→ 三级（空白）→ 四级硬切
+            # 降级查找必须限定在 [scan_from, window_end)，否则每块退化为全量扫描
+            cut = BoundaryDetector.find_secondary(text, scan_from, window_end)
+            if cut < 0:
+                cut = BoundaryDetector.find_tertiary(text, scan_from, window_end)
+            if cut < 0:
+                cut = window_end
+        if cut <= start:
+            cut = window_end
 
         chunk = text[start:cut]
         if chunk.strip():
@@ -488,7 +649,11 @@ def split_text_recursive(
         if cut >= n:
             break
         last_cut = cut
-        next_start = cut - overlap_chars
+        ov = overlap_chars
+        if overlap_ratio:
+            ov = max(ov, compute_overlap_chars(cut - start, overlap_chars, overlap_ratio))
+            ov = min(ov, max_chars - 1)
+        next_start = cut - ov
         start = next_start if next_start > start else start + 1
     return chunks
 
@@ -555,7 +720,9 @@ def split_text_by_chapters(
     text: str,
     min_chars: int = MIN_CHUNK_CHARS,
     max_chars: int = MAX_CHUNK_CHARS,
-    overlap_chars: int = DEFAULT_OVERLAP_CHARS
+    overlap_chars: int = DEFAULT_OVERLAP_CHARS,
+    target_chars: Optional[int] = None,
+    overlap_ratio: Optional[float] = None
 ):
     """
     按章节边界切片：每个章节独立切块，chunk 携带所属章节标题。
@@ -567,7 +734,9 @@ def split_text_by_chapters(
         text: 输入全文
         min_chars: 最小切分距离（不足不切分）
         max_chars: 无标点时的强制切分距离
-        overlap_chars: 相邻片段重叠字符数
+        overlap_chars: 相邻片段重叠字符数（重叠下限）
+        target_chars: 目标块长（透传 split_text_recursive）
+        overlap_ratio: 重叠比例（透传 split_text_recursive）
 
     Returns:
         (chunks, chapter_of_chunk):
@@ -578,7 +747,8 @@ def split_text_by_chapters(
     """
     boundaries = _find_chapter_boundaries(text)
     if not boundaries:
-        chunks = split_text_recursive(text, min_chars, max_chars, overlap_chars)
+        chunks = split_text_recursive(text, min_chars, max_chars, overlap_chars,
+                                      target_chars, overlap_ratio)
         return chunks, ["正文"] * len(chunks)
 
     chunks, chapter_of_chunk = [], []
@@ -594,7 +764,8 @@ def split_text_by_chapters(
         body = '\n'.join(body_lines).strip()
         if not body:
             continue
-        for chunk in split_text_recursive(body, min_chars, max_chars, overlap_chars):
+        for chunk in split_text_recursive(body, min_chars, max_chars, overlap_chars,
+                                          target_chars, overlap_ratio):
             chunks.append(chunk)
             chapter_of_chunk.append(title)
 
@@ -602,12 +773,14 @@ def split_text_by_chapters(
     last_end = boundaries[-1][1]
     tail = '\n'.join(text.split('\n')[last_end:]).strip()
     if tail:
-        for chunk in split_text_recursive(tail, min_chars, max_chars, overlap_chars):
+        for chunk in split_text_recursive(tail, min_chars, max_chars, overlap_chars,
+                                          target_chars, overlap_ratio):
             chunks.append(chunk)
             chapter_of_chunk.append("正文")
 
     if not chunks:
-        chunks = split_text_recursive(text, min_chars, max_chars, overlap_chars)
+        chunks = split_text_recursive(text, min_chars, max_chars, overlap_chars,
+                                      target_chars, overlap_ratio)
         chapter_of_chunk = ["正文"] * len(chunks)
     return chunks, chapter_of_chunk
 
@@ -672,6 +845,7 @@ class BoundaryDetector:
     PRIMARY_PUNCT = ("。", "！", "？", "!", "?", "…")
     CLOSING_QUOTES = ("”", '"', "』", "」")
     SECONDARY_PUNCT = ("；", ";", "：", ":", "，", ",", "、")
+    _WHITESPACE = re.compile(r"\s")  # 三级边界预编译（避免每块重复编译）
 
     @classmethod
     def find_primary(cls, text: str, start: int = 0) -> int:
@@ -687,25 +861,37 @@ class BoundaryDetector:
         return -1
 
     @classmethod
-    def find_secondary(cls, text: str, start: int = 0) -> int:
-        """二级边界：第一个从句标点之后的切分点；无命中返回 -1。"""
-        if not text:
-            return -1
-        for i in range(max(0, start), len(text)):
-            if text[i] in cls.SECONDARY_PUNCT:
-                return i + 1
-        return -1
+    def find_secondary(cls, text: str, start: int = 0, limit: Optional[int] = None) -> int:
+        """二级边界：第一个从句标点之后的切分点；无命中返回 -1。
 
-    @classmethod
-    def find_tertiary(cls, text: str, start: int = 0) -> int:
-        """三级边界：第一段空白（含换行）之后的切分点；无命中返回 -1。"""
+        limit 给定时只在 [start, limit) 内查找（默认 None = 扫描到文末）。
+        切片主链路必须传 limit，否则每块都会退化为全量扫描（O(n²)）。
+        """
         if not text:
             return -1
         begin = max(0, start)
-        m = re.search(r'\s', text[begin:])
+        end = len(text) if limit is None else max(0, min(int(limit), len(text)))
+        best = -1
+        for p in cls.SECONDARY_PUNCT:
+            i = text.find(p, begin, end)
+            if i != -1 and (best == -1 or i < best):
+                best = i
+        return best + 1 if best != -1 else -1
+
+    @classmethod
+    def find_tertiary(cls, text: str, start: int = 0, limit: Optional[int] = None) -> int:
+        """三级边界：第一段空白（含换行）之后的切分点；无命中返回 -1。
+
+        limit 语义同 find_secondary。
+        """
+        if not text:
+            return -1
+        begin = max(0, start)
+        end = len(text) if limit is None else max(0, min(int(limit), len(text)))
+        m = cls._WHITESPACE.search(text, begin, end)
         if not m:
             return -1
-        cut = begin + m.end()
+        cut = m.end()
         while cut < len(text) and text[cut].isspace():
             cut += 1
         return cut
@@ -744,10 +930,10 @@ class BoundaryDetector:
 
             window_end = start + max_chars
             scan_from = min(start + min_scan, window_end - 1)
-            cut = BoundaryDetector.find_secondary(text, scan_from)
-            if cut < 0 or cut > window_end:
-                cut = BoundaryDetector.find_tertiary(text, scan_from)
-            if cut < 0 or cut > window_end:
+            cut = BoundaryDetector.find_secondary(text, scan_from, window_end)
+            if cut < 0:
+                cut = BoundaryDetector.find_tertiary(text, scan_from, window_end)
+            if cut < 0:
                 cut = window_end  # 四级：无任何可切点 → 硬切
             if cut <= start:
                 cut = window_end

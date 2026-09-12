@@ -15,6 +15,7 @@ from typing import List, Dict, Callable, Optional
 from utils import (
     split_text_by_chapters,
     resolve_split_params,
+    resolve_split_spec,
     MIN_CHUNK_CHARS,
     MAX_CHUNK_CHARS,
     DEFAULT_OVERLAP_CHARS,
@@ -23,16 +24,19 @@ from utils import (
     load_embedding_model,
     build_parent_chunks,
 )
-from novel_context import inject_coref_prefix, chapter_aggregate_rerank
+from novel_context import inject_coref_prefix, chapter_aggregate_rerank, build_character_table
 
 
 def _pick_characters(chunk_texts: List[str]) -> List[str]:
-    """主角表选择：优先用户配置（由调用方注入），否则用内置默认表。
+    """主角表选择：从本书原文自动挖掘高频人名（角色表按项目隔离）。
 
-    预留：后续可在此接入 build_character_table 从全文自动挖掘。
+    不再使用 novel_context.DEFAULT_CHARACTERS——那是跨书混排的示例名单，
+    直接把《遮天》《盘龙》的角色注入本书，会让 coref_prefix 全部标错主语
+    （如本书主角「叶星」的片段被标注为「狠人」）。
+    这里以 known=[] 调 build_character_table，只用从本书全文挖掘的候选。
     """
-    from novel_context import DEFAULT_CHARACTERS
-    return list(DEFAULT_CHARACTERS)
+    text = "\n".join(chunk_texts)
+    return build_character_table(text, known=[])
 
 
 def build_vector_index(
@@ -41,23 +45,31 @@ def build_vector_index(
     overlap: int = DEFAULT_OVERLAP_CHARS,
     output_dir: str = "./vector_db",
     embedding_model_path: Optional[str] = None,
-    progress_callback: Optional[Callable] = None
+    progress_callback: Optional[Callable] = None,
+    target_chars: Optional[int] = None,
+    overlap_ratio: Optional[float] = None
 ) -> bool:
     """
     构建向量索引
 
-    切片规格：文本不足 MIN_CHUNK_CHARS(200) 字符不切分；超过 200 字符后
-    寻找句号/感叹号/冒号/问号，命中即切片；距上次切分点超过
-    MAX_CHUNK_CHARS(512) 字符仍无上述标点则强制切片；相邻片段重叠
-    overlap 个字符。
+    切片规格（由 utils.resolve_split_spec 唯一发放）：
+    - 最优先：距上次切分点不足 MIN_CHUNK_CHARS(200) 字符 → 不切分，
+      即使遇到句末标点也继续累积；
+    - 可切区间：达到 200 字符后、512 字符前遇到 。！：？ → 在其后切分，
+      并在窗口内优先选最接近 target_chars(400) 的标点；
+    - 兜底：距上次切分点超过 MAX_CHUNK_CHARS(512) 仍无一级标点 →
+      二级（；：，、）→ 三级（空白）→ 硬切；
+    - 相邻重叠 = max(overlap, 前块长度 × overlap_ratio)。
 
     Args:
         text: 输入文本
         chunk_size: 切片硬上限（字符数，规格区间 [200, 512]，缺省 512）
-        overlap: 相邻片段重叠长度（字符数，缺省 50）
+        overlap: 相邻片段重叠长度下限（字符数，缺省 50）
         output_dir: 输出目录
         embedding_model_path: 嵌入模型路径（可选，为空使用关键词检索）
         progress_callback: 进度回调 (step: int, total: int, message: str, percent: float)
+        target_chars: 目标块长覆盖值（None → 400，裁剪进 [min, max]）
+        overlap_ratio: 重叠比例覆盖值（None → 0.15，裁剪进 [0, 0.5]）
 
     Returns:
         是否成功
@@ -66,15 +78,19 @@ def build_vector_index(
         # 创建输出目录
         os.makedirs(output_dir, exist_ok=True)
 
-        # 规格切片参数：min/max/重叠均由 utils 统一映射（见 resolve_split_params）
-        min_chars, max_chars, overlap_chars = resolve_split_params(chunk_size, overlap)
+        # 规格切片参数：min/max/重叠/目标长度/重叠比例由 utils 唯一出口发放。
+        # 实际生效的 spec 会落盘 split_spec.json，供检索端与运维对账
+        # （历史上 TARGET_CHUNK_CHARS/OVERLAP_RATIO 曾因未接线而静默失效）。
+        spec = resolve_split_spec(chunk_size, overlap, target_chars, overlap_ratio)
+        min_chars, max_chars = spec["min_chars"], spec["max_chars"]
 
         # 文本切片（按章节边界切分，chunk 携带真实章节标题）
         if progress_callback:
             progress_callback(0, 100, "正在切片...", 0)
 
         chunks, chapter_of_chunk = split_text_by_chapters(
-            text, min_chars, max_chars, overlap_chars
+            text, min_chars, max_chars, spec["overlap_chars"],
+            target_chars=spec["target_chars"], overlap_ratio=spec["overlap_ratio"],
         )
 
         if not chunks:
@@ -86,7 +102,11 @@ def build_vector_index(
         # ---- 指代消解增强：为疑似指代开头的 chunk 注入主语前缀 ----
         # 注入后的增广文本仅用于向量化与关键词检索，metadata 存回原始文本，
         # 保证展示给 LLM/用户的仍是原文；前缀使含「他/她」的片段可被主角名召回。
-        augmented = inject_coref_prefix(chunks, chapter_of_chunk)
+        # 主角表从本书原文自动挖掘（known=[]），避免跨书默认表注入错误主语。
+        characters = _pick_characters(chunks)
+        if progress_callback:
+            progress_callback(10, 100, f"主角表(自动挖掘): {'、'.join(characters[:8])}", 10)
+        augmented = inject_coref_prefix(chunks, chapter_of_chunk, characters=characters)
         chunks_with_prefix = [
             aug if aug != orig else ""  # 仅标记真正注入过的
             for aug, orig in zip(augmented, chunks)
@@ -219,6 +239,25 @@ def build_vector_index(
             json.dump(parent_chunks, f, ensure_ascii=False, indent=1)
         print(f"✓ 父块已保存: {parent_path} ({len(parent_chunks)} 条)")
 
+        # 保存实际生效的切片规格（供检索端对齐口径 + 运维/测试对账）
+        lengths = sorted(len(c) for c in chunks)
+        spec_record = dict(spec)
+        spec_record.update({
+            "chunk_count": chunk_count,
+            "parent_count": len(parent_chunks),
+            "chunk_length_min": lengths[0] if lengths else 0,
+            "chunk_length_median": lengths[len(lengths) // 2] if lengths else 0,
+            "chunk_length_max": lengths[-1] if lengths else 0,
+        })
+        spec_path = os.path.join(output_dir, "split_spec.json")
+        with open(spec_path, 'w', encoding='utf-8') as f:
+            json.dump(spec_record, f, ensure_ascii=False, indent=1)
+        print(
+            f"✓ 切片规格已保存: {spec_path} "
+            f"(min={spec['min_chars']} target={spec['target_chars']} max={spec['max_chars']} "
+            f"overlap={spec['overlap_chars']}/{spec['overlap_ratio']})"
+        )
+
         if progress_callback:
             progress_callback(100, 100, "向量化完成！", 100)
 
@@ -244,7 +283,9 @@ def build_vector_index_from_file(
     overlap: int = DEFAULT_OVERLAP_CHARS,
     output_dir: str = "./vector_db",
     embedding_model_path: Optional[str] = None,
-    progress_callback: Optional[Callable] = None
+    progress_callback: Optional[Callable] = None,
+    target_chars: Optional[int] = None,
+    overlap_ratio: Optional[float] = None
 ) -> bool:
     """
     从文件构建向量索引
@@ -252,10 +293,12 @@ def build_vector_index_from_file(
     Args:
         input_file: 输入文本文件路径
         chunk_size: 切片硬上限（字符数，规格区间 [200, 512]，缺省 512）
-        overlap: 相邻片段重叠长度（字符数，缺省 50）
+        overlap: 相邻片段重叠长度下限（字符数，缺省 50）
         output_dir: 输出目录
         embedding_model_path: 嵌入模型路径
         progress_callback: 进度回调
+        target_chars: 目标块长覆盖值（None → 400）
+        overlap_ratio: 重叠比例覆盖值（None → 0.15）
 
     Returns:
         是否成功
@@ -284,7 +327,9 @@ def build_vector_index_from_file(
             overlap=overlap,
             output_dir=output_dir,
             embedding_model_path=embedding_model_path,
-            progress_callback=progress_callback
+            progress_callback=progress_callback,
+            target_chars=target_chars,
+            overlap_ratio=overlap_ratio
         )
 
     except Exception as e:

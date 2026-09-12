@@ -18,9 +18,14 @@
 import re
 from typing import Dict, List, Optional
 
+from utils import is_chapter_title
+
 # ===================== 主角表 =====================
-# 示例主角表，覆盖本项目两部小说的主要角色/别称；
-# 更通用的做法是 ingest 时从原文自动挖掘（见 build_character_table）。
+# 兜底示例名单（跨书混排，仅供 known 显式传入或测试使用）。
+# 注意：不要把它当作某本书的默认主角表——它混有《遮天》《盘龙》等角色，
+# 注入本书会造成「叶星的片段被标注为狠人」这类错误主语。
+# 正式链路（step2_split_embed）应调用 build_character_table(text, known=[])
+# 从本书原文自动挖掘，实现角色表按项目隔离。
 DEFAULT_CHARACTERS = [
     "叶凡", "庞博", "姬紫月", "黑皇", "姜太虚", "狠人", "无始",
     "林雷", "迪莉娅", "贝贝", "德斯黎", "霍格", "林蒙", "盘龙戒指",
@@ -41,8 +46,15 @@ def build_character_table(text: str, known: Optional[List[str]] = None) -> List[
 
     启发式：统计 2-4 字连续中文片段词频，取高频且非停用词的候选合并。
     实际工程可用 jieba + 词性过滤 + 人物共现，这里保持零依赖。
+
+    Args:
+        text: 本书全文（用于挖掘高频人名）
+        known: 显式已知名单；None 时叠加 DEFAULT_CHARACTERS（跨书兜底表），
+               传 [] 表示只保留从本书挖掘的结果，实现角色表按项目隔离。
     """
-    characters = list(known or DEFAULT_CHARACTERS)
+    # 注意：不能用 `known or DEFAULT_CHARACTERS`——空列表为假值，
+    # 会被兜底表覆盖，导致跨书角色（狠人/林雷等）混进本书主角表。
+    characters = list(DEFAULT_CHARACTERS if known is None else known)
 
     # 人名通常 2-3 字：对每个纯中文 run 滑窗统计 2-gram/3-gram 词频
     # （不能用贪婪定长切割，会把「叶凡与庞博同行」切碎导致人名统计不到）
@@ -77,16 +89,8 @@ def _looks_like_quote_line(line: str) -> bool:
 
 
 def _is_chapter_title_line(line: str) -> bool:
-    """轻量章节标题判定（与 utils 一致，避免循环依赖）"""
-    stripped = line.strip()
-    if not stripped or len(stripped) > 60:
-        return False
-    if re.search(r'[。！？；…]', stripped):
-        return False
-    return bool(re.match(
-        r'^\s*(?:第[一二三四五六七八九十百千万零〇两\d]+[章节回卷部集篇话]\s*[^\n]{0,60}|序章|楔子|引子|番外|后记|尾声|完本感言)',
-        stripped
-    ))
+    """章节标题判定（转调 utils.is_chapter_title，全项目单一实现）。"""
+    return is_chapter_title(line)
 
 
 def _first_name_in_line(line: str, characters: List[str]) -> Optional[str]:

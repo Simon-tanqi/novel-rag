@@ -14,7 +14,7 @@ import re
 import os
 from typing import List, Optional
 
-from utils import get_root_dir
+from utils import get_root_dir, is_chapter_title
 
 
 # ===================== 编码错误映射表 =====================
@@ -57,6 +57,9 @@ GARBLED_CHARS = {
     '飝': '飞', '靐': '雷', '焱': '火', '淼': '水', '鑫': '金', '森': '木',
 }
 
+# 拼音 → 汉字映射。
+# 注意：dict 字面量中后键会静默覆盖前键，曾出现 'yīn' 重复定义
+# （'音' 被 '阴' 覆盖）导致映射静默失效；新增键前请确认无重复。
 PINYIN_MAP = {
     'sè': '色', 'rì': '日', 'zhàn': '战', 'bō': '波',
     'jīng': '精', 'mō': '摸', 'chén': '沉', 'xùn': '迅',
@@ -77,7 +80,7 @@ PINYIN_MAP = {
     'gōng': '功', 'dòu': '斗', 'shā': '杀', 'zhǎn': '斩',
     'sǐ': '死', 'yǒu': '有', 'wú': '无', 'shí': '实',
     'zhēn': '真', 'hǎo': '好', 'xǐ': '喜', 'lè': '乐',
-    'yīn': '阴', 'yáng': '阳', 'lěng': '冷', 'rè': '热',
+    'yáng': '阳', 'lěng': '冷', 'rè': '热',
     'chūn': '春', 'jiǔ': '九', 'bǎi': '百', 'qiān': '千',
     'wàn': '万', 'shén': '神', 'xiān': '仙', 'mó': '魔',
 }
@@ -177,15 +180,23 @@ _TRAILING_BRACKET_RE = re.compile(
 )
 
 
+# 整行水印判定的行长上限：超过该长度的行不判为水印（正文长句保护）。
+# 由 80 放宽到 200 —— 书源水印常见整句式（网址 + 更新提示 + 祈使语，
+# 长度易超 80 字）会被旧上限漏删；判定依据是 SITE_MARKERS 多词同现的
+# 结构特征，放宽上限不显著增加正文误杀。
+MAX_WATERMARK_LINE_CHARS = 200
+
+
 def _line_is_watermark(stripped: str) -> bool:
     """判断整行是否为广告/水印行（命中即应删除）
 
     判定前须已剔除行尾括号水印。策略（防误杀）：
+    - 行长超过 MAX_WATERMARK_LINE_CHARS(200) → 不判为水印（正文长句保护）；
     - 含任一强导航信号（站点/网址/祈使语/更新提示）→ 删除；
     - 仅含泛词时：不删除 —— 正文里“下载/免费/正版”等词很常见，
       单凭泛词删整行会误杀正常叙述。
     """
-    if not stripped or len(stripped) > 80:
+    if not stripped or len(stripped) > MAX_WATERMARK_LINE_CHARS:
         return False
     if any(marker in stripped for marker in SITE_MARKERS):
         return True
@@ -260,16 +271,12 @@ def _merge_paragraphs(text: str) -> str:
 
 
 def _looks_like_chapter_title(line: str) -> bool:
-    """判断文本行是否像章节标题（行首匹配，短行无句读）"""
-    stripped = line.strip()
-    if not stripped or len(stripped) > 60:
-        return False
-    if re.search(r'[。！？；…]', stripped):
-        return False
-    return bool(re.match(
-        r'^\s*(?:第[一二三四五六七八九十百千万零〇两\d]+[章节回卷部集篇话]\s*[^\n]{0,60}|序章|楔子|引子|番外|后记|尾声|完本感言)',
-        stripped
-    ))
+    """章节标题判定（转调 utils.is_chapter_title，全项目单一实现）。
+
+    旧实现在此处重复了「行首第X章 + 短行 + 不含句读」的规则，
+    且与 utils/novel_context 版本漂移，导致清洗阶段误吞带！？的标题。
+    """
+    return is_chapter_title(line)
 
 
 def _fix_encoding(text: str) -> str:
