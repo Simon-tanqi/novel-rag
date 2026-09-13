@@ -1,13 +1,17 @@
 """
-rebuild_embeddings.py — 重新生成 embeddings.npy，不重新切片
+rebuild_embeddings.py — 重新生成 embeddings.npy（按向量库落盘规格重切 + 重嵌入）
 
 适用场景：metadata.json 存在但 embeddings.npy 缺失（典型：ingest 时嵌入模型
 加载失败，自动降级到关键词模式，status 被错误地设成 ready）
+
+切片口径：优先复用向量库内 split_spec.json（建库时实际生效的规格），
+使其与 ingest 完全一致；老库无该文件时回落项目配置 + 规格默认值。
 
 用法（PowerShell）：
     python scripts/rebuild_embeddings.py
 （嵌入模型已随仓库分发在 models/ 下，无需联网；如需下载更大模型可设 HF_ENDPOINT）
 """
+import json
 import os
 import sys
 import time
@@ -18,6 +22,7 @@ sys.path.insert(0, ROOT)
 
 import project_manager
 from step2_split_embed import build_vector_index_from_file
+from utils import resolve_split_spec
 
 # 1) 找目标项目（命令行参数 > 第一个非 demo 项目 > 提示用户）
 target_name = sys.argv[1] if len(sys.argv) > 1 else None
@@ -67,8 +72,33 @@ embedding_path = cfg_mgr.get("embedding_model_path", "") or "BAAI/bge-small-zh-v
 print(f"\n嵌入模型: {embedding_path}")
 print(f"HF_ENDPOINT = {os.environ.get('HF_ENDPOINT', '(未设置)')}\n")
 
-# 3) 跑向量化（会重读 cleaned → 重新切片 → encode → 写 npy + 覆盖 meta）
-#    切片是确定性的（chunk_size/overlap 固定），所以 meta 与原版等价
+# 3) 切片规格：优先复用建库时落盘的 split_spec.json（保证重建与 ingest 同口径），
+#    缺失时按规格默认值（min 200 / target 400 / max 512 / 重叠 max(50, 前块 15%)）回落；
+#    统一经 utils.resolve_split_spec 裁剪，与建库/检索走同一出口。
+split_spec_path = os.path.join(proj["vector_db_path"], "split_spec.json")
+disk_spec = {}
+if os.path.exists(split_spec_path):
+    try:
+        with open(split_spec_path, encoding="utf-8") as f:
+            disk_spec = json.load(f)
+        print(f"切片规格: 复用 {split_spec_path}")
+    except (json.JSONDecodeError, IOError) as e:
+        disk_spec = {}
+        print(f"⚠ split_spec.json 读取失败（{e}），回落规格默认值")
+else:
+    print("ℹ 无 split_spec.json（老向量库），按规格默认值重建")
+
+spec = resolve_split_spec(
+    chunk_size=disk_spec.get("max_chars"),
+    overlap=disk_spec.get("overlap_chars"),
+    target_chars=disk_spec.get("target_chars"),
+    overlap_ratio=disk_spec.get("overlap_ratio"),
+)
+print(f"  生效: min={spec['min_chars']} target={spec['target_chars']} "
+      f"max={spec['max_chars']} overlap={spec['overlap_chars']}/{spec['overlap_ratio']}")
+
+# 4) 跑向量化（会重读 cleaned → 重新切片 → encode → 写 npy + 覆盖 meta，
+#    并按同一规格刷新 split_spec.json）
 def progress(step, total, msg, pct=0):
     bar_len = 30
     filled = int(bar_len * pct / 100)
@@ -78,22 +108,23 @@ def progress(step, total, msg, pct=0):
 t0 = time.time()
 ok = build_vector_index_from_file(
     input_file=cleaned,
-    chunk_size=proj.get("chunk_size", 500),
-    overlap=proj.get("overlap", 50),
+    chunk_size=spec["max_chars"],
+    overlap=spec["overlap_chars"],
     output_dir=proj["vector_db_path"],
     embedding_model_path=embedding_path,
     progress_callback=progress,
+    target_chars=spec["target_chars"],
+    overlap_ratio=spec["overlap_ratio"],
 )
 print()  # 换行
 elapsed = time.time() - t0
 
 if ok:
-    # 4) 验证 npy
+    # 5) 验证 npy
     import numpy as np
     npy_path = os.path.join(proj["vector_db_path"], "embeddings.npy")
     arr = np.load(npy_path)
     meta_path = os.path.join(proj["vector_db_path"], "metadata.json")
-    import json
     meta = json.load(open(meta_path, encoding="utf-8"))
     print(f"\n✅ 重建完成 ({elapsed:.1f}s)")
     print(f"   embeddings.npy: {arr.shape}  ({arr.dtype})  L2 归一化: {np.allclose(np.linalg.norm(arr, axis=1), 1.0, atol=1e-3)}")
