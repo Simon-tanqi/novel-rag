@@ -35,6 +35,6 @@ chardet>=5.0.0
 # 开发与测试
 pytest>=7.0.0
 
-# epub 格式支持（可选；缺失时 ingest epub 会提示安装）
-# ebooklib>=0.18
-# beautifulsoup4>=4.12.0
+# epub 格式支持（ebooklib + beautifulsoup4）为**可选依赖**，不在本文件强制安装。
+# 需要导入 .epub 时执行：pip install -r requirements-extras.txt
+# 未安装也不会影响 txt 流程；导入 epub 时会给出明确的安装提示。

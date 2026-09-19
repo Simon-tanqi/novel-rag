@@ -292,4 +292,6 @@ class TestCmdIngestSamePathSkip:
         pm = ProjectManager()
         project = pm.get_project_by_name("demo")
         assert project is not None
-        assert project["status"] == "ready"
+        # args.embedding="" 表示无嵌入模型，且此处 patch 掉的建库未产出 embeddings.npy，
+        # 因此状态应为 keyword_only（修复前会无条件写成 ready，造成"向量检索不可用"的假象）
+        assert project["status"] == "keyword_only"

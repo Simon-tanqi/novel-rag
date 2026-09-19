@@ -41,7 +41,7 @@ from rag_retriever import RAGRetriever
 from format_loader import is_supported_format, load_raw_text
 from step1_clean import RULE_FUNCTIONS, clean_file
 from step2_split_embed import build_vector_index_from_file
-from utils import DEFAULT_EMBEDDING_MODEL, load_env_file, resolve_split_spec
+from utils import DEFAULT_EMBEDDING_MODEL, load_env_file, resolve_rerank_policy, resolve_split_spec
 
 # 最先加载项目根目录 .env（幂等，仅补未设置键）
 load_env_file()
@@ -70,6 +70,18 @@ def _resolve_embedding_spec(cfg: ConfigManager) -> str:
         or os.environ.get("EMBEDDING_MODEL", "").strip()
         or DEFAULT_EMBEDDING_MODEL
     )
+
+
+def _resolve_rerank_policy(cfg: ConfigManager, cli_value=None) -> dict:
+    """精排策略：命令行/接口显式选择 > 配置显式开启 > 本地模型自动探测 > 降级纯向量检索。
+
+    详情见 utils.resolve_rerank_policy（含四档优先级与「探测不到就降级、不下载」的承诺）。
+    返回 {"enable", "reranker_path", "source", "note"}，note 非空时打印给用户。
+    """
+    policy = resolve_rerank_policy(cli_value, cfg)
+    if policy.get("note"):
+        print(policy["note"])
+    return policy
 
 
 def _get_project(name: Optional[str]) -> dict:
@@ -133,6 +145,33 @@ def _get_api_params(cfg: ConfigManager, api_key: Optional[str], model_id: Option
         )
         sys.exit(1)
     return api_url, key, name
+
+
+def _get_api_params_optional(cfg: ConfigManager, api_key: Optional[str], model_id: Optional[str]):
+    """与 _get_api_params 同源，但缺 API Key / URL 时返回 None 而非退出。
+
+    供 cmd_ask 使用：README 承诺「不需要 API Key 也能验证检索链路」，
+    因此检索必须照常执行，仅在「调用 LLM 生成」这一步降级跳过。
+    """
+    model = cfg.get_active_model()
+    if not model:
+        return None
+    api_url = model.get("api_url", "")
+    key = api_key or model.get("api_key", "")
+    name = model_id or model.get("model_id") or model.get("name", "")
+    if not api_url or not key:
+        return None
+    return api_url, key, name
+
+
+def _print_hits(hits) -> None:
+    """打印命中片段（仅章节与分数，不含正文）"""
+    if not hits:
+        return
+    print("── 命中原文片段（来源） ──")
+    for h in hits:
+        score = f"[score={h.get('score'):.3f}]" if isinstance(h.get('score'), (int, float)) else ""
+        print(f"  · {h.get('chapter', '未知')} {score}")
 
 
 # ===================== 子命令 =====================
@@ -241,27 +280,51 @@ def cmd_ingest(args) -> None:
         progress_callback=_print_progress,
         target_chars=getattr(args, "target_chars", None),
         overlap_ratio=getattr(args, "overlap_ratio", None),
+        book_id=project_id,
+        book_title=name,
     )
     if not ok:
         print("✗ 向量化失败")
         sys.exit(1)
 
-    pm.update_project(project_id, {"status": "ready"})
+    # 真实落盘校验：只有 embeddings.npy 落地才算 ready。
+    # （step2 对「显式指定嵌入模型却加载不到」直接返回失败；仅当用户把
+    #  embedding_model_path 置空、主动选择纯关键词模式时才只落 metadata.json，
+    #  因此状态必须按 embeddings.npy 是否落地判定，避免 ready 假象。）
+    emb_file = os.path.join(vector_db_path, "embeddings.npy")
+    has_vectors = os.path.exists(emb_file)
+    pm.update_project(project_id, {"status": "ready" if has_vectors else "keyword_only"})
     pm.set_current_project(project_id)
 
-    print(f"\n✅ 项目「{name}」构建完成！向量库位于: {vector_db_path}")
+    if has_vectors:
+        print(f"\n✅ 项目「{name}」构建完成！向量库位于: {vector_db_path}")
+    else:
+        print(f"\n⚠ 项目「{name}」已创建，但未生成 embeddings.npy（嵌入模型不可用）")
+        print("   当前为纯关键词检索模式，召回质量差；请检查运行环境后重新 ingest:")
+        from utils import check_vector_dependencies, format_vector_dependency_hint
+        dep = check_vector_dependencies()
+        if not dep["ok"]:
+            print(format_vector_dependency_hint(dep))
     print(f"   试试问答: python novel_rag.py ask --name {name} \"你的问题\"")
     print(f"   或开 GUI: python main.py")
 
 
-def _prepare_retriever(cfg: ConfigManager, project: dict) -> RAGRetriever:
+def _prepare_retriever(cfg: ConfigManager, project: dict,
+                       reranker_path: Optional[str] = None) -> RAGRetriever:
+    """构建检索器。
+
+    reranker_path 传 None 时按统一精排策略自动解析（供评测脚本等直接调用方使用，
+    保证与 CLI 同一套「探测到本地模型即启用」的口径）；显式传入（含空串）以传入为准。
+    """
     vector_path = project.get("vector_db_path", "")
     if not vector_path or not os.path.isdir(vector_path):
         print(f"✗ 项目「{project.get('name')}」尚未构建向量库，请先运行 ingest。")
         sys.exit(1)
+    if reranker_path is None:
+        reranker_path = resolve_rerank_policy(None, cfg)["reranker_path"]
     return RAGRetriever.get_or_create(
         vector_path,
-        reranker_model_path=cfg.get("reranker_model_path", ""),
+        reranker_model_path=reranker_path or "",
         embedding_model_path=_resolve_embedding_spec(cfg),
         vector_file=project.get("vector_file"),
         metadata_file=project.get("metadata_file"),
@@ -269,22 +332,37 @@ def _prepare_retriever(cfg: ConfigManager, project: dict) -> RAGRetriever:
 
 
 def cmd_ask(args) -> None:
-    """单次 RAG 问答"""
+    """单次 RAG 问答（未配置 API Key 时降级为「仅检索」，兑现 README 的免 Key 验证承诺）"""
     cfg = _get_config()
     project = _get_project(args.name)
-    api_url, api_key, model_name = _get_api_params(cfg, args.api_key, args.model_id)
+    # 此处不再直接 sys.exit：README 承诺「不需要 API Key 也能验证检索链路」，
+    # 因此先跑完检索，仅在生成阶段按 api_params 是否为 None 决定是否调用 LLM。
+    api_params = _get_api_params_optional(cfg, args.api_key, args.model_id)
 
     prompt_template = cfg.get_prompt_template()
     top_k = int(cfg.get("top_k", 3))
     enable_thinking = cfg.get("enable_thinking", False)
-    # 重排：命令行 --rerank/--no-rerank 优先，否则取 config.enable_rerank
-    enable_rerank = args.rerank if args.rerank is not None else bool(cfg.get("enable_rerank", False))
+    # 重排：命令行 --rerank/--no-rerank 优先；否则配置显式开启；否则本地探测到模型即自动启用
+    rerank_policy = _resolve_rerank_policy(cfg, args.rerank)
+    enable_rerank = rerank_policy["enable"]
 
-    retriever = _prepare_retriever(cfg, project)
+    retriever = _prepare_retriever(cfg, project, rerank_policy.get("reranker_path", ""))
     print("🔍 正在检索原文片段 ...")
     hits = retriever.retrieve(args.question, top_k=top_k, enable_rerank=enable_rerank)
     context = _build_context(hits)
 
+    if api_params is None:
+        # 免 Key 验证路径：检索链路照常跑，只跳过 LLM 生成（README 步骤 4）
+        print("\n" + "=" * 50)
+        print(f"Q: {args.question}\n")
+        print(
+            f"⚠ 未配置 API Key / API URL：已跳过 LLM 生成，仅验证检索链路"
+            f"（命中 {len(hits)} 条）。配置方式见 README「一键运行验证」步骤 4。\n"
+        )
+        _print_hits(hits)
+        return
+
+    api_url, api_key, model_name = api_params
     if prompt_template:
         prompt = _build_prompt(
             prompt_template,
@@ -302,11 +380,7 @@ def cmd_ask(args) -> None:
     print("\n" + "=" * 50)
     print(f"Q: {args.question}\n")
     print(f"A: {reply}\n")
-    if hits:
-        print("── 命中原文片段（来源） ──")
-        for h in hits:
-            score = f"[score={h.get('score'):.3f}]" if isinstance(h.get('score'), (int, float)) else ""
-            print(f"  · {h.get('chapter', '未知')} {score}")
+    _print_hits(hits)
 
 
 def cmd_chat(args) -> None:
@@ -318,9 +392,10 @@ def cmd_chat(args) -> None:
     prompt_template = cfg.get_prompt_template()
     top_k = int(cfg.get("top_k", 3))
     enable_thinking = cfg.get("enable_thinking", False)
-    # 重排：命令行 --rerank/--no-rerank 优先，否则取 config.enable_rerank
-    enable_rerank = args.rerank if args.rerank is not None else bool(cfg.get("enable_rerank", False))
-    retriever = _prepare_retriever(cfg, project)
+    # 重排：命令行 --rerank/--no-rerank 优先；否则配置显式开启；否则本地探测到模型即自动启用
+    rerank_policy = _resolve_rerank_policy(cfg, args.rerank)
+    enable_rerank = rerank_policy["enable"]
+    retriever = _prepare_retriever(cfg, project, rerank_policy.get("reranker_path", ""))
     novel_name = project.get("name", "")
 
     history_messages: List[dict] = []
@@ -437,7 +512,7 @@ def cmd_demo(args) -> None:
     ingest_args = argparse.Namespace(
         file=demo_file,
         name="demo",
-        chunk_size=500,
+        chunk_size=672,
         overlap=50,
         rules=None,
         words=None,
@@ -556,7 +631,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_ingest = sub.add_parser("ingest", help="构建 RAG 项目（清洗→切片→向量化）")
     p_ingest.add_argument("file", help="小说文件路径（.txt 或 .epub）")
     p_ingest.add_argument("--name", help="项目名（默认取文件名）")
-    p_ingest.add_argument("--chunk-size", type=int, default=512, help="切片硬上限（字符数，默认 512）")
+    p_ingest.add_argument("--chunk-size", type=int, default=672, help="切片硬上限（字符数，默认 672 ≈ 480 token，最小 210）")
     p_ingest.add_argument("--overlap", type=int, default=50, help="相邻片段重叠字符数下限（默认 50）")
     p_ingest.add_argument(
         "--target-chars", type=int, default=None,

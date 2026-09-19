@@ -54,8 +54,28 @@ def get_chat_logs_dir() -> Path:
 
 
 def get_project_dir(project_name: str) -> Path:
-    """获取项目专属目录"""
-    project_dir = get_data_dir() / project_name
+    """获取项目专属目录
+
+    安全基线：项目名不得逃逸出 data/ 根目录。若项目名含 `../`（或绝对路径等）
+    越界片段，则只取最后一段作为目录名（**夹取**），保证目录始终落在 data/ 之内；
+    夹取发生时会在控制台输出显式告警（含原始项目名与夹取结果），避免静默改写。
+    """
+    data_dir = get_data_dir()
+    project_dir = data_dir / str(project_name).replace("\\", "/")
+    try:
+        resolved = project_dir.resolve()
+        data_resolved = data_dir.resolve()
+        escaped = resolved != data_resolved and data_resolved not in resolved.parents
+    except Exception:
+        escaped = False
+    if escaped:
+        tail = Path(str(project_name).replace("\\", "/")).name
+        if tail in ("", ".", ".."):
+            tail = "default"
+        project_dir = data_dir / tail
+        # 显式告警（安全基线）：项目名越界已被夹取，调用方需知晓真实落点
+        print(f"⚠ 项目名越界: {project_name!r} → 已夹取到 {project_dir}"
+              f"（项目目录不得逃出 data/）")
     project_dir.mkdir(exist_ok=True)
     return project_dir
 
@@ -96,6 +116,50 @@ def to_absolute_path(rel_path: str) -> str:
 # 首次使用 HF 模型 ID 时，会自动下载到项目根 models/ 目录，无需联网到 ~/.cache。
 # 中文小说场景推荐 bge-small-zh-v1.5（约 95MB，GPU/CPU 均可跑）。
 DEFAULT_EMBEDDING_MODEL = "BAAI/bge-small-zh-v1.5"
+
+
+def check_vector_dependencies() -> dict:
+    """检查向量检索所需的运行环境依赖（torch / sentence_transformers）。
+
+    典型故障场景：用未安装 torch 的系统解释器（如 Python313）启动 GUI/CLI，
+    嵌入模型加载失败 → 建库时只写 metadata.json 不写 embeddings.npy，
+    检索阶段静默降级为纯关键词模式，表现为「重新清洗、向量化后仍无法向量检索」。
+
+    Returns:
+        {"torch": bool, "sentence_transformers": bool, "ok": bool, "python": str}
+    """
+    import sys as _sys
+
+    result = {
+        "torch": False,
+        "sentence_transformers": False,
+        "ok": False,
+        "python": _sys.executable,
+    }
+    try:
+        import torch  # noqa: F401
+        result["torch"] = True
+    except Exception:
+        pass
+    try:
+        import sentence_transformers  # noqa: F401
+        result["sentence_transformers"] = True
+    except Exception:
+        pass
+    result["ok"] = result["torch"] and result["sentence_transformers"]
+    return result
+
+
+def format_vector_dependency_hint(dep: dict) -> str:
+    """把 check_vector_dependencies() 的结果格式化为可打印的告警文案。"""
+    missing = [k for k in ("torch", "sentence_transformers") if not dep.get(k)]
+    lines = [
+        "【环境警告】当前解释器缺少向量检索依赖: " + ", ".join(missing),
+        f"  当前解释器: {dep.get('python', '')}",
+        r"  正确启动方式: 使用项目虚拟环境，如 D:\Xunlei\novel-rag\.venv\Scripts\python.exe main.py",
+        "  影响: 建库不会生成 embeddings.npy，检索只能走关键词模式（答不准）",
+    ]
+    return "\n".join(lines)
 
 
 def resolve_embedding_model(spec: Optional[str]):
@@ -141,7 +205,7 @@ def resolve_embedding_model(spec: Optional[str]):
             return ('local', p)
 
     # 2) 形如 org/name 的 HF ID：检查项目根/models/<basename>/
-    if re.match(r'^[\w.-]+/[\w.-]+$', spec):
+    if is_hf_model_id(spec):
         try:
             root = get_root_dir()
             default_local = root / "models" / spec.split('/')[-1]
@@ -186,30 +250,112 @@ def get_compute_device() -> str:
     return device
 
 
-def _try_download_to_local_models(model_id: str) -> Optional[str]:
-    """
-    下载 HF 模型到项目根 models/<basename>/ 目录。
-    成功返回本地绝对路径，失败返回 None。
+# 形如 org/name 的 HuggingFace 模型 ID（区别于本地目录路径）
+_HF_MODEL_ID_RE = re.compile(r'^[\w.-]+/[\w.-]+$')
+# 可用于离线加载的权重文件后缀（另见 onnx/ 目录判定）
+_MODEL_WEIGHT_SUFFIXES = (".safetensors", ".bin", ".onnx", ".pt", ".ckpt")
 
-    优先尝试用户设置的 HF_ENDPOINT（国内 hf-mirror），
-    下载的 .safetensors / .bin 等核心权重保留 README/TXT 等冗余文件不下载。
+
+def is_hf_model_id(spec) -> bool:
+    """spec 是否为 org/name 形式的 HF 模型 ID（而非本地目录路径）"""
+    if not spec:
+        return False
+    return bool(_HF_MODEL_ID_RE.match(str(spec).strip()))
+
+
+def is_local_model_ready(path) -> bool:
+    """
+    本地目录是否「看上去可直接离线加载」：含 config.json 且至少一个权重文件（或 onnx/ 目录）。
+
+    只用于识别下载中断留下的空壳目录（如 models/<name>/ 只建了目录、没下到权重），
+    避免它被当成命中本地而永久阻断后续自动下载；目录里只要有真实模型文件即视为可用，
+    不做严格校验，保持与历史行为兼容。
     """
     try:
+        p = Path(path)
+        if not p.is_dir() or not (p / "config.json").is_file():
+            return False
+        for f in p.iterdir():
+            if f.is_file() and f.suffix.lower() in _MODEL_WEIGHT_SUFFIXES:
+                return True
+        return (p / "onnx").is_dir()
+    except OSError:
+        return False
+
+
+def _hf_snapshot_download_params() -> set:
+    """探测当前 huggingface_hub 的 snapshot_download 支持哪些参数（兼容 0.x / 1.x）。"""
+    try:
+        import inspect
         from huggingface_hub import snapshot_download
+        return set(inspect.signature(snapshot_download).parameters)
+    except Exception:
+        return set()
+
+
+def _remove_empty_dir(path) -> None:
+    """目录存在且为空时删除（静默失败）；避免下载中断残留空壳目录。"""
+    try:
+        p = Path(path)
+        if p.is_dir() and not any(p.iterdir()):
+            p.rmdir()
+    except OSError:
+        pass
+
+
+def _try_download_to_local_models(model_id: str) -> Optional[str]:
+    """
+    下载 HF 模型到项目根 models/<basename>/ 目录（本地未命中时的联网兜底）。
+    成功返回本地绝对路径，失败返回 None，且不残留空壳目录。
+
+    - cache_dir 固定为项目内 .hf_cache/；HF_ENDPOINT（如 hf-mirror）由 huggingface_hub 自行读取；
+    - 兼容 huggingface_hub 0.x / 1.x：1.x 已移除 local_dir_use_symlinks 参数，
+      旧代码直接传该参数会抛 TypeError，导致「下载到 models/」整条链路静默失效；
+    - 仅忽略 README / 脚本等冗余文件，保留 tokenizer 依赖的 vocab.txt 等文本资源，
+      保证下载下来的目录能被 local_files_only=True 离线加载。
+    """
+    try:
         root = get_root_dir()
-        local_dir = root / "models" / model_id.split('/')[-1]
-        local_dir.mkdir(parents=True, exist_ok=True)
-        snapshot_download(
-            repo_id=model_id,
-            local_dir=str(local_dir),
-            local_dir_use_symlinks=False,
-            cache_dir=str(root / ".hf_cache"),
-            ignore_patterns=["*.md", "*.txt", "*.py"],
-        )
-        return str(local_dir)
+        local_dir = root / "models" / str(model_id).split('/')[-1]
     except Exception as e:
         print(f"  ⚠ 自动下载失败：{e}")
         return None
+
+    try:
+        from huggingface_hub import snapshot_download
+        kwargs = dict(
+            repo_id=model_id,
+            local_dir=str(local_dir),
+            cache_dir=str(root / ".hf_cache"),
+            ignore_patterns=["*.md", "*.py"],
+        )
+        if "local_dir_use_symlinks" in _hf_snapshot_download_params():
+            kwargs["local_dir_use_symlinks"] = False
+        snapshot_download(**kwargs)
+        if is_local_model_ready(local_dir):
+            return str(local_dir)
+        print(f"  ⚠ 自动下载未得到完整模型目录：{local_dir}")
+        _remove_empty_dir(local_dir)
+        return None
+    except Exception as e:
+        print(f"  ⚠ 自动下载失败：{e}")
+        _remove_empty_dir(local_dir)
+        return None
+
+
+def _reroute_stale_local(kind: str, target: str, spec: Optional[str]):
+    """
+    本地命中但目录不可用（下载中断的空壳）时改判为 hub —— 仅对 HF 模型 ID 生效。
+
+    不这样处理的话，空壳目录会让后续每次启动都「本地命中 → 离线加载失败 →
+    静默降级为关键词检索」，永远不再尝试下载，本地优先反而变成永久失效。
+    显式传入本地路径时保持原行为（目录有效性由调用方自行保证）。
+    """
+    if kind == 'local' and is_hf_model_id(spec) and not is_local_model_ready(target):
+        print(f"⚠ 本地目录不完整（缺少模型权重）：{target}")
+        print(f"  → 改按模型 ID 重新下载：{str(spec).strip()}")
+        return 'hub', str(spec).strip()
+    return kind, target
 
 
 def load_embedding_model(spec: Optional[str]):
@@ -232,13 +378,16 @@ def load_embedding_model(spec: Optional[str]):
         return None, "cpu"
     kind, target = resolved
     device = get_compute_device()
+    kind, target = _reroute_stale_local(kind, target, spec)
 
     model = None
     try:
         from sentence_transformers import SentenceTransformer
         if kind == 'local':
-            print(f"✓ 加载本地嵌入模型: {target}  [设备: {device}]")
             model = SentenceTransformer(target, local_files_only=True, device=device)
+            # 成功后才报成功：空壳/损坏目录下原先会「先报 ✓ 加载成功、再报 ⚠ 加载失败」，
+            # 自相矛盾且误导排障。
+            print(f"✓ 加载本地嵌入模型: {target}  [设备: {device}]")
         else:
             # kind == 'hub'：先自动下载到项目根 models/<basename>/
             print(f"⏳ 首次使用将下载嵌入模型 {target}")
@@ -252,10 +401,12 @@ def load_embedding_model(spec: Optional[str]):
                 print(f"⏳ 本地下载失败，尝试 HF 默认缓存: {target}")
                 model = SentenceTransformer(target, device=device)
     except ImportError:
-        print("⚠ 未安装 sentence_transformers，将使用关键词检索模式")
+        print("⚠ 未安装 sentence_transformers：检索端将降级关键词检索；"
+              "建库将直接失败（请先装依赖，或把 embedding_model_path 置空）")
         return None, "cpu"
     except Exception as e:
-        print(f"⚠ 加载嵌入模型失败: {e}（将使用关键词检索模式）")
+        print(f"⚠ 加载嵌入模型失败: {e}"
+              f"（检索端将降级关键词检索；显式指定模型的建库会直接失败）")
         return None, "cpu"
 
     if model is not None:
@@ -286,6 +437,7 @@ def load_reranker_model(spec: Optional[str]):
         return None, "cpu"
     kind, target = resolved
     device = get_compute_device()
+    kind, target = _reroute_stale_local(kind, target, spec)
 
     model = None
     try:
@@ -320,6 +472,139 @@ def load_reranker_model(spec: Optional[str]):
     except Exception:
         pass
     return model, device
+
+
+# ===================== 精排（reranker）策略 =====================
+# 默认重排模型 ID：仅在「用户显式开启精排、但既没配路径也没探测到本地目录」时兜底。
+# 注意这是**兜底值而非强制依赖**——默认链路只探测本地目录，探测不到就降级为纯向量检索。
+DEFAULT_RERANKER_MODEL = "BAAI/bge-reranker-base"
+# 目录名含这些片段才视为重排模型候选（防止把嵌入模型误判成精排模型）
+_RERANKER_DIR_HINTS = ("reranker", "cross-encoder", "cross_encoder")
+# 多候选时的偏好顺序（越靠前越优先，其余按目录名排序）
+_RERANKER_NAME_PREFERENCE = ("bge-reranker-base", "bge-reranker-v2-m3", "bge-reranker-large")
+
+
+def detect_local_reranker(root=None) -> Optional[str]:
+    """探测项目 models/ 下「可直接离线加载」的重排（CrossEncoder）模型目录。
+
+    判定顺序：
+    1. 遍历 <项目根>/models/* 子目录，目录名含 reranker / cross-encoder /
+       cross_encoder（大小写不敏感），且 is_local_model_ready（有 config.json +
+       权重文件或 onnx/）→ 命中；
+    2. 多命中时按 _RERANKER_NAME_PREFERENCE 前缀优先（bge-reranker-base >
+       bge-reranker-v2-m3 > bge-reranker-large > 其他），同档按目录名排序；
+    3. 无命中返回 None。
+
+    语义边界：**只做只读探测**，不下载、不创建目录、不抛异常（任何 IO 异常一律
+    按「未检测到」处理），因此「有没有本地精排模型」不会成为开箱即用的硬前置。
+    """
+    try:
+        models_dir = (Path(root) / "models") if root else (get_root_dir() / "models")
+        if not models_dir.is_dir():
+            return None
+        cands = []
+        for child in models_dir.iterdir():
+            if not child.is_dir():
+                continue
+            if not any(h in child.name.lower() for h in _RERANKER_DIR_HINTS):
+                continue
+            if not is_local_model_ready(child):
+                continue
+            cands.append(child)
+        if not cands:
+            return None
+
+        def _rank(p: Path):
+            name = p.name.lower()
+            for i, pref in enumerate(_RERANKER_NAME_PREFERENCE):
+                if name == pref or name.endswith(pref):
+                    return (0, i, name)
+            return (1, 0, name)
+
+        return str(sorted(cands, key=_rank)[0])
+    except OSError:
+        return None
+    except Exception:
+        return None
+
+
+def resolve_rerank_policy(cli_value=None, cfg=None, explicit_path: str = "") -> dict:
+    """统一决定「是否启用精排」与「用哪个重排模型」（CLI / GUI / 评测脚本共用）。
+
+    优先级（高 → 低）：
+    1. cli_value 显式给定（True / False）：本次调用的用户意图最高优先；
+    2. cfg["enable_rerank"] 为 True：配置里显式开启精排；
+    3. cfg["rerank_auto_detect"]（缺省视为 True）为真，且 detect_local_reranker()
+       探测到本地重排模型目录 → 自动启用（本次改造的核心：有模型就默认用上）；
+    4. 否则关闭精排 —— 打印明确告警并降级为纯向量检索，
+       **不报错、不下载、不新增强制依赖**，开箱体验与改造前一致。
+
+    Args:
+        cli_value: 命令行/GUI 的显式选择，True=强制开、False=强制关、None=未指定
+        cfg: ConfigManager 实例或同接口的 dict（仅调用 .get）
+        explicit_path: 调用方已知的重排模型路径（优先于配置项）
+
+    Returns:
+        {
+          "enable": bool,          # 本次是否启用精排
+          "reranker_path": str,    # 传给 RAGRetriever 的重排模型路径（可能为空）
+          "source": str,           # cli / cli_off / config / auto_local / off
+          "note": str,             # 建议打印给用户的一行说明（可能为空串）
+        }
+    """
+    def _get(key, default=None):
+        try:
+            return cfg.get(key, default) if cfg is not None else default
+        except Exception:
+            return default
+
+    cfg_path = str(_get("reranker_model_path", "") or "").strip()
+    path = str(explicit_path or "").strip() or cfg_path
+    auto = _get("rerank_auto_detect", True)
+    auto = True if auto is None else bool(auto)
+    detected = detect_local_reranker()
+
+    def _resolved_path() -> str:
+        return path or detected or DEFAULT_RERANKER_MODEL
+
+    if cli_value is True:
+        chosen = _resolved_path()
+        note = (f"✓ 精排已启用（命令行指定）: {chosen}"
+                if (path or detected) else
+                f"⚠ 未找到本地精排模型，将按模型 ID 尝试加载 {chosen}"
+                f"（首次需联网下载；离线环境会自动跳过精排）")
+        return {"enable": True, "reranker_path": chosen, "source": "cli", "note": note}
+
+    if cli_value is False:
+        return {"enable": False, "reranker_path": "", "source": "cli_off", "note": ""}
+
+    if bool(_get("enable_rerank", False)):
+        chosen = _resolved_path()
+        note = (f"✓ 精排已启用（配置 enable_rerank=true）: {chosen}"
+                if (path or detected) else
+                f"⚠ 配置已开启精排但未找到本地重排模型，将按模型 ID 尝试加载 {chosen}"
+                f"（首次需联网下载；离线环境会自动跳过精排）")
+        return {"enable": True, "reranker_path": chosen, "source": "config", "note": note}
+
+    if auto and (path or detected):
+        # path 非空 = 配置里已指定重排模型路径；detected = 本地探测到可用的重排模型目录
+        chosen = path or detected
+        source = "config_path" if path else "auto_local"
+        head = "✓ 已自动启用精排（配置指定路径）" if path else "✓ 检测到本地精排模型，已自动启用精排"
+        return {
+            "enable": True,
+            "reranker_path": chosen,
+            "source": source,
+            "note": (f"{head}: {chosen}"
+                     f"（如需关闭：命令加 --no-rerank，或配置 rerank_auto_detect=false）"),
+        }
+
+    if auto:
+        note = ("⚠ 未检测到本地精排模型（如 models/bge-reranker-base），已降级为纯向量检索"
+                "（不影响使用）；如需精排：python scripts/download_models.py --reranker")
+    else:
+        note = "ℹ 精排未启用（配置 rerank_auto_detect=false）"
+    return {"enable": False, "reranker_path": "", "source": "off", "note": note}
 
 
 def model_id_to_dirname(model_id: str) -> str:
@@ -457,19 +742,36 @@ def _find_chapter_boundaries(text: str):
     return boundaries
 
 
+# 公共别名：chunking.py（新切片引擎）按章解析结构时复用同一实现，
+# 保证「章标题判定」全项目只有一个入口。
+find_chapter_boundaries = _find_chapter_boundaries
+
+
 # ===================== 分片规格（递归切片） =====================
 # 规格（优先级从高到低，split_text_recursive 唯一实现）：
-# 0) MIN_CHUNK_CHARS 是最优先硬约束：距上次切分点不足 200 字符 →
+# 0) MIN_CHUNK_CHARS(210 字 ≈ 150 token) 为最优先硬约束：距上次切分点不足该长度 →
 #    即使遇到句末标点也不切分，剩余整体作为尾块；
-# 1) 达到 200 字符后进入可切区间：在 (上次切分点, 上次切分点+200] 之后、
-#    512 字符之前，遇到一级标点 。！：？ → 在其后切分；给定 target_chars
-#    时优先挑最接近 400 字符的标点，避免块长全部极化到上限；
-# 2) 距上次切分点超过 MAX_CHUNK_CHARS(512) 仍无一级标点 → 依次降级
+# 1) 达到 min 后进入可切区间：在 (上次切分点 + min, 上次切分点 + max] 内遇到一级标点
+#    。！？： → 在其后切分；给定 target_chars(560 字 ≈ 400 token) 时优先挑最接近
+#    目标的标点，避免块长全部极化到上限；
+# 2) 距上次切分点超过 MAX_CHUNK_CHARS(672 字 ≈ 480 token) 仍无一级标点 → 依次降级
 #    二级（；：，、）/ 三级（空白）/ 四级硬切兜底；
-# 3) 相邻片段重叠 = max(DEFAULT_OVERLAP_CHARS, 前块长度 × OVERLAP_RATIO)。
-MIN_CHUNK_CHARS = 200
-MAX_CHUNK_CHARS = 512
-DEFAULT_OVERLAP_CHARS = 50
+# 3) 相邻片段重叠 = max(DEFAULT_OVERLAP_CHARS, 前块长度 × OVERLAP_RATIO)，上限
+#    OVERLAP_MAX_CHARS(100 字)，句边界对齐。
+# 2026-09 改造：规格以 token 为准（字符仅为窗口搜索的换算值，CHARS_PER_TOKEN）。
+#   - 目标：嵌入模型上限(512 token)的 70%-80% ⇒ 400 token ≈ 560 字（落 400-700 字）
+#   - 硬上限：480 token ≈ 672 字
+#   - 最小：150 token ≈ 210 字（低于则合并相邻段落）
+#   - 重叠：10%-15%（50-100 字），句边界对齐
+MIN_CHUNK_TOKENS = 150
+TARGET_CHUNK_TOKENS = 400
+MAX_CHUNK_TOKENS = 480
+CHARS_PER_TOKEN = 1.4          # 汉字 ≈ 0.72 token ⇒ 1 token ≈ 1.4 字
+
+MIN_CHUNK_CHARS = 210          # 最小切分距离（字符）：不足不切，低于则合并
+MAX_CHUNK_CHARS = 672          # 硬上限（字符）：= 480 token
+DEFAULT_OVERLAP_CHARS = 50     # 重叠下限（字符）
+OVERLAP_MAX_CHARS = 100        # 重叠上限（字符）
 # 触发切分的一级标点集合（句号、感叹号、冒号、问号）
 CHUNK_BOUNDARY_PUNCT = ("。", "！", "：", "？")
 
@@ -502,27 +804,33 @@ def resolve_split_spec(chunk_size=None, overlap=None,
                        target_chars=None, overlap_ratio=None) -> dict:
     """分层切片完整规格：切片参数的唯一出口（建库 / 检索 / CLI / GUI 均经此）。
 
+    2026-09 起规格以 token 为准，字符值由 CHARS_PER_TOKEN(1.4) 换算：
+    目标 400 token ≈ 560 字（模型上限 512 的 ~78%）、硬上限 480 token ≈ 672 字、
+    最小 150 token ≈ 210 字；重叠 10%-15%（50-100 字），句边界对齐。
+
     Args:
-        chunk_size: 硬上限覆盖值；仅当落在 [MIN_CHUNK_CHARS, MAX_CHUNK_CHARS]
-            区间内才生效，否则回落 MAX_CHUNK_CHARS（避免超出模型 512 上下文）。
-        overlap: 重叠下限（字符）覆盖值；None → DEFAULT_OVERLAP_CHARS。
-        target_chars: 目标块长覆盖值；None → TARGET_CHUNK_CHARS(400)。
+        chunk_size: 硬上限覆盖值（字符）；仅当落在 [MIN_CHUNK_CHARS, MAX_CHUNK_CHARS]
+            区间内才生效，否则回落 MAX_CHUNK_CHARS(672)。
+        overlap: 重叠下限（字符）覆盖值；None → DEFAULT_OVERLAP_CHARS(50)。
+        target_chars: 目标块长覆盖值（字符）；None → TARGET_CHUNK_CHARS(560)。
             取 min(max(min_chars, 目标值), max_chars)，保证落在 [min, max] 内。
-        overlap_ratio: 重叠比例覆盖值；None → OVERLAP_RATIO(0.15)，
+        overlap_ratio: 重叠比例覆盖值；None → OVERLAP_RATIO(0.125)，
             取值裁剪到 [0, 0.5]，避免重叠吞掉整块。
 
     Returns:
         {
-            "min_chars": 200,        # 最小切分距离（硬优先级：不足不切分）
-            "max_chars": 512,        # 硬上限
-            "overlap_chars": 50,     # 重叠下限
-            "target_chars": 400,     # 目标块长（未接线前长期失效，现由本函数统一发放）
-            "overlap_ratio": 0.15,   # 重叠比例
+            "unit": "token",
+            "chars_per_token": 1.4,
+            "min_tokens": 150, "target_tokens": 400, "max_tokens": 480,
+            "min_chars": 210, "target_chars": 560, "max_chars": 672,
+            "overlap_chars": 50,        # 重叠下限
+            "overlap_max_chars": 100,   # 重叠上限
+            "overlap_ratio": 0.125,     # 重叠比例
         }
 
     说明：min_chars 是**最优先约束**——距上次切分点不足 min_chars 时，
-    即使遇到句末标点也不切分；只有落在 [min_chars, max_chars] 区间内的
-    一级标点（。！：？）才触发切分，超过 max_chars 无标点则硬切兜底。
+    即使遇到句末标点也不切分；切点在 [min_chars, max_chars] 窗口内按
+    「空行/段落 > 句末标点 > 逗号/冒号 > 硬切」搜索最接近目标长度者。
     """
     min_chars, max_chars, overlap_chars = resolve_split_params(chunk_size, overlap)
 
@@ -540,10 +848,19 @@ def resolve_split_spec(chunk_size=None, overlap=None,
         ratio = OVERLAP_RATIO
     ratio = min(max(0.0, ratio), 0.5)
 
+    def _to_tokens(chars: int) -> int:
+        return max(1, int(round(chars / CHARS_PER_TOKEN)))
+
     return {
+        "unit": "token",
+        "chars_per_token": CHARS_PER_TOKEN,
+        "min_tokens": _to_tokens(min_chars),
+        "target_tokens": _to_tokens(target_chars),
+        "max_tokens": _to_tokens(max_chars),
         "min_chars": min_chars,
         "max_chars": max_chars,
         "overlap_chars": overlap_chars,
+        "overlap_max_chars": OVERLAP_MAX_CHARS,
         "target_chars": target_chars,
         "overlap_ratio": ratio,
     }
@@ -822,9 +1139,9 @@ def format_timestamp(dt: Optional[datetime] = None) -> str:
 # 子块仍由 split_text_recursive / split_text_by_chapters 产出，
 # 新增的只是「父块聚合」与「边界降级探测」这两层能力。
 
-TARGET_CHUNK_CHARS = 400   # 子块目标长度（字符）
-OVERLAP_MIN_CHARS = 50     # 子块重叠下限（字符）
-OVERLAP_RATIO = 0.15       # 子块重叠比例（前块长度的 15%）
+TARGET_CHUNK_CHARS = 560   # 子块目标长度（字符，= TARGET_CHUNK_TOKENS 400）
+OVERLAP_MIN_CHARS = DEFAULT_OVERLAP_CHARS  # 子块重叠下限（字符）
+OVERLAP_RATIO = 0.125      # 子块重叠比例（前块长度的 12.5%，规格 10%-15% 中值）
 PARENT_MIN_CHARS = 800     # 父块长度下限（字符）
 PARENT_MAX_CHARS = 1500    # 父块长度上限（字符）
 PARENT_GROUP_MIN = 2       # 父块最少聚合子块数
@@ -952,7 +1269,7 @@ def compute_overlap_chars(
 ) -> int:
     """分层切片的相邻子块重叠长度：max(overlap_min, 前块长度 × overlap_ratio)。
 
-    即规格中的 `max(50, 前块 × 15%)`。供需要按「句首对齐」重建重叠的
+    即规格中的 `max(50, 前块 × 12.5%)`（= OVERLAP_RATIO）。供需要按「句首对齐」重建重叠的
     调用方使用（既有 split_text_recursive 的字符重叠口径保持不变）。
     """
     try:

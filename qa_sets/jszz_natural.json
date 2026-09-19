@@ -1,0 +1,27 @@
+{
+  "name": "jszz",
+  "book": "绝世主宰",
+  "note": "自然问法 QA 集（人工构造，gold 章节经原文核验）。type: scene=含定位线索的场景题; open=开放式/实体稀释题",
+  "items": [
+    {"id": 1, "type": "open", "question": "叶星体内那颗可以不断强化自身、散发夺目黄光的珠子叫什么？", "answer_terms": ["不灭梵珠"], "gold_chapter": "第八十二章离开秘境", "evidence": "不灭梵珠散发着夺目黄光…不灭梵珠黄级"},
+    {"id": 2, "type": "scene", "question": "叶星那副吸收了他血液的拳套，对元婴以下的攻击能提供多少倍增幅？", "answer_terms": ["二十倍"], "gold_chapter": "第123章 皇帝要来了", "evidence": "元婴以下，攻击二十倍增幅"},
+    {"id": 3, "type": "open", "question": "叶星用来注意周围危险、能持续开启的瞳术叫什么？", "answer_terms": ["末日灵瞳"], "gold_chapter": "第164章 搜寻宝物", "evidence": "叶星末日灵瞳还是开启着，注意着任何可能出现的危险"},
+    {"id": 4, "type": "scene", "question": "叶星的名字冲入第七星区域后，成为该区域的第几位强者？", "answer_terms": ["第九"], "gold_chapter": "第287章 万众瞩目", "evidence": "第九位七星强者诞生了！"},
+    {"id": 5, "type": "open", "question": "南宫家族那位额头能射出紫光、可以迷惑海皇母兽的女子是谁？", "answer_terms": ["南宫紫烟"], "gold_chapter": "第410章 击杀母兽", "evidence": "南宫紫烟额头露出淡淡紫光…射中了距离几公里的海皇母兽"},
+    {"id": 6, "type": "scene", "question": "无极城六大势力中被称为“一家”的、由龙袍老者掌管的势力是哪一家？", "answer_terms": ["皇家"], "gold_chapter": "第328章 一封信", "evidence": "三帮二门一家！…一家指的就是皇家"},
+    {"id": 7, "type": "open", "question": "在丹云会长的葬礼上，叶星当众承诺要为他做什么？", "answer_terms": ["找出凶手"], "gold_chapter": "第369章 沸血散", "evidence": "我一定帮你尽力找出凶手，击杀凶手"},
+    {"id": 8, "type": "scene", "question": "叶星制住腹蛇王后，要求他首先把什么敞开？", "answer_terms": ["空间戒指"], "gold_chapter": "第451章 痕王圆满", "evidence": "你就先把你的空间戒指敞开，我看看里面有什么东西"},
+    {"id": 9, "type": "open", "question": "南宫紫烟被神秘强者带走后，叶星立刻带队赶往了哪个域？", "answer_terms": ["橙天域"], "gold_chapter": "第491章 一念地狱", "evidence": "去橙天域！…叶星沉声道"},
+    {"id": 10, "type": "open", "question": "叶星能在十天内从兑凡初期提升到兑凡后期，靠的是使用了什么宝物？", "answer_terms": ["十寸光阴木"], "gold_chapter": "第573章 联合行动", "evidence": "虽然只是十天，但是使用了十寸光阴木啊"},
+    {"id": 11, "type": "scene", "question": "叶星在黑狱区与久别重逢的师尊共饮时敬酒的对象是谁？", "answer_terms": ["穆洪"], "gold_chapter": "第655章 不死神诀", "evidence": "徒儿，这一别真是好久不见…穆洪打破了沉默缓缓开口"},
+    {"id": 12, "type": "open", "question": "腾剑泉在分别前拜托叶星替他完成什么事？", "answer_terms": ["报仇"], "gold_chapter": "第696章 前往仙界", "evidence": "我们腾家的仇，只能你帮忙报了"},
+    {"id": 13, "type": "scene", "question": "叶星再次进入黑狱星时，在大殿外留下了多少蚁族强者守护？", "answer_terms": ["一百"], "gold_chapter": "第737章 重临黑狱星", "evidence": "大殿外面，叶星留了一百蚁族强者守护"},
+    {"id": 14, "type": "open", "question": "叶星想查看大总管功德与业力状况时，开启的是哪一种灵瞳？", "answer_terms": ["善恶灵瞳"], "gold_chapter": "第778章 以炎黄之名", "evidence": "叶星善恶灵瞳这时候开启了，他想看看这一个大总管善恶情况如何"},
+    {"id": 15, "type": "scene", "question": "林无天选择前往发展势力的那个顶尖大千世界叫什么？", "answer_terms": ["刀域"], "gold_chapter": "第819章 林无天，轩辕明月", "evidence": "林无天当初就是选择的前往刀域"},
+    {"id": 16, "type": "scene", "question": "火幻舞她们转移到的新的时间宝物，能承受多少倍的时间加速？", "answer_terms": ["十万倍"], "gold_chapter": "第860章 斩清旋的诱惑", "evidence": "她们能承受十万倍左右的时间加速"},
+    {"id": 17, "type": "open", "question": "魔龙谷在八千年前就布下、沾得越久爆发越可怕的毒素叫什么？", "answer_terms": ["情花之毒"], "gold_chapter": "第901章 情花之毒", "evidence": "八千年积累的情花毒素爆发…情花之毒沾染的时间越久就越不容易发"},
+    {"id": 18, "type": "scene", "question": "叶星请那位有预言能力的帮手查探妻子下落，那人叫什么？", "answer_terms": ["苏白"], "gold_chapter": "第942章 救出一人", "evidence": "苏白，是抓幻舞清旋她们的强者的消息？"},
+    {"id": 19, "type": "scene", "question": "抓走清旋的那一方势力是哪个宗？", "answer_terms": ["血煞宗"], "gold_chapter": "第942章 救出一人", "evidence": "其中一方是血煞宗的强者，还有一方是黑狱掌狱者"},
+    {"id": 20, "type": "scene", "question": "新加入炎黄城的强者向叶星下跪行礼时，怎么称呼他？", "answer_terms": ["城主"], "gold_chapter": "第983章 善恶王", "evidence": "叶城主，我们也想加入炎黄城"}
+  ]
+}

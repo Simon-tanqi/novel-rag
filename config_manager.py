@@ -51,6 +51,13 @@ class ConfigManager:
         else:
             config = self._get_default_config()
 
+        # 契约守卫：load() 的返回类型标注是 dict。顶层若为数组/标量（配置被写坏，
+        # 或路径误指向其他 JSON），必须回退默认配置 —— 否则下游 .get() 直接崩栈
+        # （如 _seed_default_model 遇 list 抛 AttributeError）。
+        if not isinstance(config, dict):
+            print(f"⚠ 配置文件顶层不是对象（{type(config).__name__}），已回退默认配置")
+            config = self._get_default_config()
+
         return self._seed_default_model(config)
 
     def _seed_default_model(self, config: dict) -> dict:
@@ -82,6 +89,9 @@ class ConfigManager:
             "enable_thinking": False,
             "enable_rerank": False,
             "reranker_model_path": "",
+            # 精排自动探测：检测到本地重排模型（models/bge-reranker-*）即自动启用精排；
+            # 探测不到则降级为纯向量检索（不报错、不下载）。设为 false 可彻底关闭自动探测。
+            "rerank_auto_detect": True,
             # 检索前查询改写：命中元词（主角/男主/女主…）时多调一次 LLM 做改写
             "enable_query_rewrite": True,
             # 嵌入模型：默认用 bge-small-zh-v1.5（自动下载）；可用 EMBEDDING_MODEL 覆盖
@@ -258,6 +268,19 @@ class ConfigManager:
     def set_reranker_model_path(self, path: str):
         """设置重排模型路径"""
         self.set("reranker_model_path", path)
+        self.save()
+
+    def get_rerank_auto_detect(self) -> bool:
+        """获取「精排自动探测」开关（缺省视为开启）
+
+        开启时：只要 models/ 下有可用的重排模型目录就自动启用精排；
+        关闭时：仅当 enable_rerank=true 或 --rerank 才启用（老行为）。
+        """
+        return bool(self.get("rerank_auto_detect", True))
+
+    def set_rerank_auto_detect(self, enabled: bool):
+        """设置「精排自动探测」开关"""
+        self.set("rerank_auto_detect", bool(enabled))
         self.save()
 
     def get_enable_query_rewrite(self) -> bool:

@@ -2,7 +2,7 @@
 """切片规格接线回归测试（防止"定义但零调用"再次发生）
 
 覆盖三条规格：
-1) min_chars=200 为最优先硬约束：不足 200 字符不切分，即使命中一级标点；
+1) min_chars=210 为最优先硬约束：不足 210 字符不切分，即使命中一级标点；
 2) target_chars / overlap_ratio 真正接线：目标择优选标点、动态重叠生效，
    且 build_vector_index 把「实际生效规格」落盘 split_spec.json 供对账；
 3) 检索端 assemble_context 按文本包含关系去重：父块覆盖子块时不重复输出。
@@ -28,27 +28,27 @@ class TestMinCharsHighestPriority:
         text = "啊" * 30 + "。" * 5 + "呀" * 100  # 135 字符，含 5 个句号
         assert split_text_recursive(text, 200, 512, 50) == [text]
 
-    def test_first_cut_never_before_200(self):
-        text = "啊" * 199 + "。" + "呀" * 400  # 首个句号落在 200 字符之内
-        chunks = split_text_recursive(text, 200, 512, 50)
+    def test_first_cut_never_before_min(self):
+        text = "啊" * 199 + "。" + "呀" * 400  # 首个句号落在 min_chars 之内
+        chunks = split_text_recursive(text, MIN_CHUNK_CHARS, MAX_CHUNK_CHARS, 50)
         assert len(chunks[0]) >= MIN_CHUNK_CHARS
         assert not chunks[0].endswith("。")
 
-    def test_only_punct_inside_200_512_window_cuts(self):
-        """只有落在 [200, 512] 窗口内的一级标点才触发切分"""
-        text = "啊" * 100 + "。" + "呀" * 99 + "？" + "嘿" * 300
-        chunks = split_text_recursive(text, 200, 512, 50)
-        assert chunks[0] == text[:201]
-        assert chunks[0].endswith("？")
+    def test_only_punct_inside_min_max_window_cuts(self):
+        """只有落在 [min_chars, max_chars] 窗口内的一级标点才触发切分"""
+        text = "啊" * 250 + "。" + "呀" * 400  # 唯一窗口内一级标点在 251 处
+        chunks = split_text_recursive(text, MIN_CHUNK_CHARS, MAX_CHUNK_CHARS, 50)
+        assert chunks[0] == text[:251]
+        assert chunks[0].endswith("。")
         assert len(chunks[0]) >= MIN_CHUNK_CHARS
 
     def test_target_mode_still_respects_min_and_max(self):
-        """开启 target 择优后，仍不得在 200 之前切、不得越过 512 上限"""
-        text = "啊" * 100 + "。" + "呀" * 500  # 窗口内无一级标点
+        """开启 target 择优后，仍不得在 min_chars 之前切、不得越过 max_chars 上限"""
+        text = "啊" * 100 + "。" + "呀" * 500  # 601 字，窗口内无一级标点且未越硬上限
         chunks = split_text_recursive(
-            text, 200, 512, 50, target_chars=400, overlap_ratio=0.15
+            text, MIN_CHUNK_CHARS, MAX_CHUNK_CHARS, 50, target_chars=560, overlap_ratio=0.125
         )
-        assert len(chunks[0]) == MAX_CHUNK_CHARS  # 硬切兜底，而非回退到句号处
+        assert chunks == [text]  # 未达硬上限：整段保留，不得在 min 之前切
         assert all(len(c) <= MAX_CHUNK_CHARS for c in chunks)
 
 
@@ -79,12 +79,15 @@ class TestTargetAndRatioWiring:
 
     def test_resolve_split_spec_defaults_and_clamp(self):
         spec = resolve_split_spec()
-        assert (spec["min_chars"], spec["target_chars"], spec["max_chars"]) == (200, 400, 512)
+        assert (spec["min_chars"], spec["target_chars"], spec["max_chars"]) == (210, 560, 672)
+        assert (spec["min_tokens"], spec["target_tokens"], spec["max_tokens"]) == (150, 400, 480)
         assert spec["overlap_chars"] == 50
-        assert abs(spec["overlap_ratio"] - 0.15) < 1e-9
+        assert spec["overlap_max_chars"] == 100
+        assert abs(spec["overlap_ratio"] - 0.125) < 1e-9
 
         clamped = resolve_split_spec(512, 50, 999, 9)
-        assert clamped["target_chars"] == MAX_CHUNK_CHARS
+        assert clamped["max_chars"] == 512   # 显式 chunk_size 作为硬上限
+        assert clamped["target_chars"] == 512
         assert clamped["overlap_ratio"] == 0.5
 
         low = resolve_split_spec(512, 50, 10, -1)

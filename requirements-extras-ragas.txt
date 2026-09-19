@@ -1,0 +1,33 @@
+# 小说RAG系统 - RAGAS 系统评测依赖（独立环境专用 extras）
+#
+# ⚠️ 安装位置：必须装进「独立虚拟环境」，不要装进主环境 .venv。
+#    原因：ragas 依赖 langchain 0.3.x 一族（见下），而 langchain 1.x 的
+#    langchain-community 已移除 chat_models.vertexai，ragas 0.4.3 仍硬 import 它，
+#    混装会直接 ImportError；反之 langchain 1.x 也会污染主流程的 pandas/numpy 版本。
+#
+# 一键建环境（Windows PowerShell）：
+#     powershell -ExecutionPolicy Bypass -File scripts/ragas_env_setup.ps1
+# 等价手工命令：
+#     python -m venv .ragas_venv
+#     .\.ragas_venv\Scripts\python.exe -m pip install -r requirements-extras-ragas.txt
+#
+# 只用 RAGAS 的评测链路，不需要 torch CUDA：torch 走 CPU 源，体积小很多：
+#     .\.ragas_venv\Scripts\python.exe -m pip install torch --index-url https://download.pytorch.org/whl/cpu
+#     .\.ragas_venv\Scripts\python.exe -m pip install -r requirements-extras-ragas.txt
+
+# ---------- 评测框架 ----------
+ragas==0.4.3
+datasets>=2.19.0
+pandas>=2.0.0
+
+# ---------- ragas 0.4.3 兼容的 langchain 版本簇（勿升级到 1.x） ----------
+langchain==0.3.30
+langchain-core==0.3.86
+langchain-community==0.3.27
+langchain-text-splitters==0.3.11
+langchain-openai==0.3.35
+
+# ---------- 中文 embedding（answer_relevancy 需要；复用本地 bge-small-zh 模型文件） ----------
+sentence-transformers>=3.0.0
+transformers>=4.44.0
+（内容由AI生成，仅供参考）

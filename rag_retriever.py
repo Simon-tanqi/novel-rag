@@ -194,8 +194,9 @@ class RAGRetriever:
                 metadata_list = json.load(f)
 
             for item in metadata_list:
-                text = item.get("text", "")
-                chapter = item.get("chapter", "")
+                # text/chapter 可能缺失或显式为 null（异常 metadata），统一归一化为字符串
+                text = item.get("text") or ""
+                chapter = item.get("chapter") or ""
                 chunk_id = item.get("chunk_id", 0)
                 self.texts.append(text)
                 self.documents.append({
@@ -287,8 +288,8 @@ class RAGRetriever:
             self.embeddings = data
             for item in meta:
                 if isinstance(item, dict):
-                    text = item.get('text', item.get('content', ''))
-                    chapter = item.get('chapter', item.get('title', ''))
+                    text = item.get('text') or item.get('content') or ""
+                    chapter = item.get('chapter') or item.get('title') or ""
                     chunk_id = item.get('chunk_id', 0)
                     self.texts.append(text)
                     self.documents.append({
@@ -402,8 +403,8 @@ class RAGRetriever:
         """读取切片规格（建库 / 检索同口径）。
 
         优先级：向量库落盘的 split_spec.json（建库时实际生效的规格）>
-        chunk_size 入参 > utils 规格默认值（min 200 / target 400 / max 512 /
-        重叠 max(50, 前块 15%)）。老向量库无 split_spec.json 时自动回落默认，
+        chunk_size 入参 > utils 规格默认值（min 210 / target 560 / max 672 /
+        重叠 50-100 字，前块 12.5%）。老向量库无 split_spec.json 时自动回落默认，
         行为与改造前一致。
         """
         disk_spec: Dict = {}
@@ -429,8 +430,8 @@ class RAGRetriever:
         """将文本分割成块（仅用于旧格式 txt 目录加载）
 
         与建库切片口径保持一致：优先取向量库 split_spec.json 的实际规格
-        （不足 200 字符不切 / 目标 400 字符并在 。！：？ 处切 / 512 无标点强制切 /
-        相邻片段重叠 max(50, 前块 15%)），避免旧 txt 目录的块粒度与向量库不一致。
+        （不足 min_chars 不切 / 在目标长度附近择优 。！？： 切 / 超 max_chars 强制切 /
+        相邻片段重叠 50-100 字，前块 12.5%），避免旧 txt 目录的块粒度与向量库不一致。
         """
         spec = self._load_split_spec(chunk_size)
         return split_text_recursive(
@@ -607,6 +608,21 @@ class RAGRetriever:
             相关文档列表，每项包含 {text, score, chapter, chunk_id, file}，
             并在末尾追加父块/邻居（新增 is_parent / is_neighbor / hit 标记字段）
         """
+        # 入口校验：非法查询 / 非正 top_k 必须是「显式的空结果」，
+        # 而不是崩栈（question=None 曾抛 AttributeError）或靠负索引取尾元素
+        # （top_k=-1 曾返回非空结果）。
+        if not isinstance(question, str) or not question.strip():
+            print("⚠ 查询问题为空或非字符串，返回空结果")
+            return []
+        try:
+            top_k = int(top_k)
+        except (TypeError, ValueError):
+            print(f"⚠ top_k 不是整数（{top_k!r}），返回空结果")
+            return []
+        if top_k <= 0:
+            print(f"⚠ top_k={top_k} 非正数，返回空结果")
+            return []
+
         if not self.documents:
             print("⚠ 没有加载文档，无法检索")
             return []
@@ -679,7 +695,19 @@ class RAGRetriever:
         if enable_rerank and self.reranker_model is not None and candidates:
             candidates = self._rerank(question, candidates)
             rerank_mode = f"CrossEncoder 精排（{len(candidates)}→{top_k}）"
+            self.last_rerank_status = ""
         else:
+            if enable_rerank and self.reranker_model is None:
+                # 显式请求精排但模型不可用 → 必须显式告知，不得静默降级
+                why = (f"重排模型不可用: {self.reranker_model_path}"
+                       if self.reranker_model_path else
+                       "重排模型不可用（未配置 reranker_model_path）")
+                msg = (f"⚠ 已请求精排，但{why}，本次跳过精排（改用召回/融合分数）"
+                       f"；如需精排：python scripts/download_models.py --reranker")
+                self.last_rerank_status = msg
+                print(msg)
+            else:
+                self.last_rerank_status = ""
             rerank_mode = "未精排（使用召远/融合分数）"
 
         # ---------- 阶段3: 章节聚合重排 + 截断 ----------

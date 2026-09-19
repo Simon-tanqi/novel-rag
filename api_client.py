@@ -50,8 +50,8 @@ class APIClient:
             api_url: API端点URL
             api_key: API密钥
             model_name: 模型名称
-            max_retries: 最大重试次数（默认 3；仅对网络异常/429/5xx 生效）
-            timeout: 单次请求超时秒数（默认 120）
+            max_retries: 最大重试次数（默认 2；仅对网络异常/429/5xx 生效）
+            timeout: 单次请求超时秒数（默认 60）
             retry_backoff: 重试基准退避秒数（按 2^n 指数增长）
         """
         self.api_url = self._normalize_url(api_url)

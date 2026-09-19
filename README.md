@@ -18,9 +18,11 @@ OpenAI-compatible LLM backend. Supports both .txt and .epub input. No cloud depe
 ## ✨ 核心特性
 
 - 📚 **多项目管理**：创建 / 切换 / 删除多个小说项目，支持导入已有向量库（.npy + .json）
-- 📖 **多格式支持**：`.txt` 和 `.epub` 一键导入；epub 自动提取章节文本并转为纯文本走清洗管线，支持导入已有向量库（.npy + .json）
+- 📖 **多格式支持**：`.txt` 和 `.epub` 一键导入；epub 自动提取章节文本并转为纯文本走清洗管线，
+  支持导入已有向量库（.npy + .json）。epub 依赖（ebooklib / beautifulsoup4）为**可选 extras**，
+  按需 `pip install -r requirements-extras.txt` 安装，不装不影响 .txt 全流程
 - 🧹 **可插拔文本清洗**：6 种规则（去除广告水印、页码、拼音残留、修复 GBK 编码错字等），支持自定义脏词
-- 📝 **标点优先递归切片**：不足 200 字符不切分；超过 200 字符遇到句号/感叹号/冒号/问号即切片；超过 512 字符仍无上述标点则强制切片；相邻片段保留 50 字符重叠
+- 📝 **标点优先递归切片**：按 token 计长（目标 400 token ≈ 560 字，硬上限 480 token ≈ 672 字，最低 150 token ≈ 210 字）；不足下限不切分；在目标长度附近择优选取句末标点（。！？：）切片；超硬上限仍无标点则强制切；相邻片段重叠 50-100 字（前块长度 12.5%，句边界对齐）
 - 🔍 **混合召回 + 精排**：向量语义召回 + 关键词召回经 RRF（倒数排名融合）合并，可选 CrossEncoder 重排进一步提升精度；未配置嵌入模型时自动回退纯关键词检索，功能不瘫痪
 - 💬 **多轮对话**：手动拼接最近 20 条消息（约 10 轮，单条截断 200 字）作为上下文，防止上下文膨胀与接口超时
 - ⚙️ **Prompt 模板外置**：可编辑系统提示，强制模型「仅依据原文、禁止编造」
@@ -55,7 +57,7 @@ flowchart LR
 |---|---|
 | 界面 | customtkinter / tkinter |
 | 文本清洗 | 正则 + 中文网文脏数据映射表（GBK 错字、水印广告、拼音残留） |
-| 切片策略 | 标点优先递归切片（`split_text_recursive`）：不足 200 字符不切 · 超 200 遇 。！：？ 即切 · 512 无标点强制切 · 相邻 50 字符重叠 |
+| 切片策略 | token 口径标点优先递归切片（`split_text_recursive`）：目标 400 token≈560 字 · 硬上限 480 token≈672 字 · 最低 150 token≈210 字不切 · 目标长度附近择优 。！？： · 相邻重叠 50-100 字（前块 12.5%、句边界对齐） |
 | 嵌入模型 | sentence-transformers（本地推理，可选；支持 HF 模型名自动下载） |
 | 混合召回 | numpy 余弦相似度 + 关键词匹配 + RRF 融合（无重依赖、跨平台） |
 | 精排 | sentence-transformers CrossEncoder（bge-reranker-base，可选，GPU 加速） |
@@ -70,8 +72,12 @@ flowchart LR
 1. **为什么用 numpy 原生实现向量检索，而不引入 faiss / chromadb？**
    单本小说向量化后约数千~数万 chunk，矩阵点积 + `argsort` 毫秒级返回，足以覆盖目标量级；
    零重依赖、跨平台可移植、便于理解原理。语料量级上升时可无缝替换为 faiss / hnswlib。
-2. **双通道检索保证健壮性**：嵌入模型缺失或加载失败时自动降级关键词检索（位置加权打分），
-   不会因为环境问题导致应用不可用；有向量时按 `top_k × 3` 召回再截断，留出后续重排空间。
+2. **双通道检索保证健壮性**：检索端在嵌入模型缺失或加载失败时自动降级关键词检索
+   （位置加权打分），不会因为环境问题导致应用不可用；有向量时按 `top_k × 3` 召回再截断，
+   留出后续重排空间。
+   注意「建库端」与「检索端」策略不同：建库时若**显式指定了**嵌入模型却加载不到，
+   直接判失败返回 `False`、不产出任何索引文件（避免「状态 ready、实则无向量」的假就绪）；
+   想完全离线请把 `embedding_model_path` 置空，走纯关键词模式建库。
 3. **清洗规则针对中文网文真实脏数据设计**：GBK/UTF-8 混排错字（如「夭才→天才」「入间→人间」）、
    站点水印广告、拼音残留、伪章节目录等，规则可插拔、可自定义脏词。
 4. **忠实度优先的 Prompt 工程**：系统提示显式要求「只使用提供的原文片段回答，不编造」；
@@ -110,18 +116,19 @@ novel-rag/
 ├── api_client.py           # LLM API 客户端
 ├── chat_logger.py          # 聊天日志
 ├── message_bubble.py       # 聊天气泡组件
-├── format_loader.py        # 多格式加载器（txt 直读 / epub 提取）
+├── format_loader.py        # 多格式加载器（txt 直读 / epub 提取，epub 依赖为可选 extras）
 ├── utils.py                # 路径 / 文本工具函数（含 GPU 设备自动检测）
-├── eval_retrieval.py       # 检索效果评估（QA 集 → Recall@K，无需 API Key / 联网）
+├── eval_retrieval.py       # 检索效果评估（QA 集 → Recall@k / MRR，无需 API Key / 联网）
 ├── conftest.py             # pytest 全局配置（测试路径注入）
 ├── setup_env.bat           # Windows 一键环境脚本（自动探测 Python 3.10 ~ 3.13）
 ├── scripts/
 │   ├── rebuild_embeddings.py   # 一键补 embeddings.npy（向量库损坏时用）
 │   └── download_models.py      # 下载模型到本地 models/（首次 clone 后运行一次）
-├── tests/                  # 单元测试（126 项；缺可选依赖时相关用例自动跳过）
+├── tests/                  # 单元测试（343 项；缺可选依赖时相关用例自动跳过）
 ├── .env.example            # 环境变量模板（复制为 .env 后填入 API Key）
 ├── config.example.json     # 配置模板（复制为 config.json 后填写）
-├── requirements.txt
+├── requirements.txt        # 必装依赖（不含 epub）
+├── requirements-extras.txt # 可选依赖（epub：ebooklib + beautifulsoup4，按需安装）
 ├── LICENSE                 # MIT
 └── README.md
 ```
@@ -172,6 +179,9 @@ python novel_rag.py ask --name demo "沈青的师父是谁？"
 # 1. 安装依赖（Windows 用户可运行一键脚本 setup_env.bat：自动创建 .venv 并安装 requirements.txt；torch 需按脚本末尾的 GPU 提示选择 CPU / GPU 版本手动安装）
 pip install -r requirements.txt
 
+# 1.1（可选，仅在需要导入 .epub 时）安装 epub 轻量 extras；不装不影响 .txt 全流程
+# pip install -r requirements-extras.txt
+
 # 2. 提供 API Key（推荐环境变量，密钥不落盘；Windows PowerShell 用 $env:DEEPSEEK_API_KEY=...）
 export DEEPSEEK_API_KEY=sk-xxxxxxxx
 
@@ -211,12 +221,21 @@ python main.py
 pip install -r requirements.txt
 ```
 
+> **epub 依赖为可选 extras（不强制）**：导入 `.epub` 需要 `ebooklib` + `beautifulsoup4`，
+> 已独立放在 `requirements-extras.txt`，按需安装即可；未安装时 `.txt` 全流程不受影响，
+> 导入 `.epub` 会给出明确的安装提示：
+> ```bash
+> pip install -r requirements-extras.txt
+> ```
+
 > CPU 环境建议先安装 CPU 版 torch 再装 sentence-transformers，避免拉取庞大的 GPU 依赖：
 > ```bash
 > pip install torch --index-url https://download.pytorch.org/whl/cpu
 > pip install -r requirements.txt
 > ```
-> 未安装成功时系统会**自动降级为关键词检索**，不影响主流程。
+> 安装未成功时：**检索端**会自动降级为关键词检索（不影响问答主流程）；但**建库端不静默降级**——
+> 已指定嵌入模型却加载不到时，建库会明确失败并返回 `False`（不产出半成品索引），
+> 此时请先装好运行环境再 `ingest`，或把 `embedding_model_path` 置空走纯关键词模式。
 
 ### 3. 配置
 
@@ -252,7 +271,9 @@ python novel_rag.py ask --name 盘龙 "你的问题" --api-key sk-xxxxxxxx
 - 国内用户建议设环境变量加速自动下载：`$env:HF_ENDPOINT="https://hf-mirror.com"` (PowerShell)
 - **手动放置**：也可自行将模型文件夹放到 `models/bge-small-zh-v1.5/`，然后在 `config.json` 中填相对路径
 - 想纯关键词模式（完全离线，无需模型）：把 `embedding_model_path` 置空即可
-- **重排模型（可选，推荐开启）**：`BAAI/bge-reranker-base`（约 220MB），开启后对混合召回候选做 CrossEncoder 精排，显著提升排序质量。下载：`python scripts/download_models.py --reranker`，然后在 config.json 中设置 `"enable_rerank": true`
+  （此时建库只落 `metadata.json`，检索走关键词通道）；反之，**填了模型路径却加载不到**时
+  建库会直接失败（返回 `False`、不产出半成品索引），不会静默降级成「假就绪」
+- **重排模型（可选，推荐开启）**：`BAAI/bge-reranker-base`（约 220MB），对混合召回候选做 CrossEncoder 精排，显著提升排序质量。下载：`python scripts/download_models.py --reranker`；**下载后无需任何配置，程序检测到本地模型即自动启用精排**，未检测到时自动降级为纯向量检索并给出提示（不报错、不联网下载、不新增强制依赖）。如需强制关闭：命令行加 `--no-rerank`，或 config.json 设 `"rerank_auto_detect": false`
 
 ### 4. 启动
 
@@ -288,24 +309,53 @@ python -m pytest tests/ -v
 ```
 
 覆盖范围：文本清洗规则（编码纠错 / 去广告 / 去页码）、句子切片边界、关键词检索回退路径、
-嵌入模型解析与配置冷启动、指代消解前缀注入与章节聚合重排、向量归一化检索、
+嵌入模型解析与配置冷启动、**建库失败即失败（模型不可用返 False、不产假就绪索引）**、
+指代消解前缀注入与章节聚合重排、向量归一化检索、
 API 客户端重试与响应解析、demo 自动注册与 cmd_demo 分支、cmd_ingest 同路径跳过、
-epub 格式加载与 HTML 标签剥离。
+epub 格式加载与 HTML 标签剥离、epub 可选依赖（extras）声明与 README 安装入口一致性。
 
-126 项测试（含混合召回 RRF、CrossEncoder 精排、降级路径等），核心用例秒级完成；
-依赖装齐时 126 项全过，未安装可选依赖（`ebooklib` / `torch`）时对应用例自动 skip。
+343 项测试（含混合召回 RRF、CrossEncoder 精排、降级路径等），核心用例秒级完成；
+依赖装齐时 343 项全过，未安装可选依赖（如 `torch`）时对应用例自动 skip。
 
 ## 效果评估思路
 
 - 内置可执行评估脚本 eval_retrieval.py（无需 API Key、无需联网）：
   ```bash
-  # 对 demo 项目跑 12 道「问题-预期章节」QA，量化召回：
+  # 对 demo 项目跑 12 道「问题-预期章节」QA，量化召回（Recall@k + MRR）：
   python eval_retrieval.py --name demo --top-k 3
-  # 输出示例：QA 总数: 12 / Recall@3 = 12/12 = 100.0%
+  # 输出示例：QA 总数: 12 / Recall@3 = 12/12 = 100.0% / MRR = 0.917
   ```
-- 命中判定按「同章」（章节名前缀匹配），输出逐题命中章节明细，可 --json-out 导出；
-- 自建语料时，把 QA 集写成 JSON（question + 预期命中章节）即可换库复跑；
+- 指标口径：Recall@k = 命中「预期章节」的题数 / 总题数；MRR = 各题首个命中排名的倒数均值，
+  越高说明命中越靠前（同一套 QA 集上可对比不同切片规格的调参效果）；
+- 命中判定按「同章」（章节名前缀匹配），输出逐题命中章节明细与首命中排名，可 --json-out 导出；
+- 切片规格（min / target / max / overlap）变更后重建向量库，再以同一 QA 集复跑，对比 Recall@k 与 MRR 判断调参方向；
+- 自建语料时，把 QA 集写成 JSON（question + 预期命中章节 + 可选 answer 参考答案）即可换库复跑；
 - 对生成答案做**忠实度人工抽检**：答案关键事实是否能在命中片段中找到依据、有无编造。
+- **配置对照评测（自然问法，无需 Key）**：`scripts/eval_config_compare.py` 在
+  baseline / top_k 50 / top_k 100 / 精排 / 实体增强 等配置间对比 Recall@5、Recall@10、MRR
+  （chunk 级与去重章节级双口径），用于确定线上默认检索配置；`scripts/eval_recall_anchor.py`
+  用于锚点式回归（改动检索逻辑后必跑）。
+- 自然问法 QA 集随仓库提供：`qa_sets/zhetian_natural.json`、`qa_sets/jszz_natural.json`
+  （场景细节题 + 开放式问句各占约一半，用于验证"实体被稀释"的长问句召回）。
+
+### RAGAS 系统评测（生成质量，需要 API Key）
+
+检索层指标只回答"有没有召回到"；答案质量需要 RAGAS 这类系统评测。本项目已落地：
+
+```powershell
+# 1) 建独立评测环境（不污染主 .venv）
+powershell -ExecutionPolicy Bypass -File scripts/ragas_env_setup.ps1
+# 2) 生成评测数据集（主环境，无需 Key）
+python scripts/ragas_eval.py gen --name zhetian --qa qa_sets/zhetian_natural.json
+# 3) 自检（RAGAS 环境，无需 Key）
+.\.ragas_venv\Scripts\python.exe scripts/ragas_eval.py dry-run --dataset ragas_out/zhetian_natural_dataset.json
+# 4) Key 到位后：生成 answer → 打分
+python scripts/ragas_eval.py gen-answers --dataset ragas_out/zhetian_natural_dataset.json
+.\.ragas_venv\Scripts\python.exe scripts/ragas_eval.py score --dataset ragas_out/zhetian_natural_dataset.json
+```
+
+四项指标：`context_recall` / `context_precision` / `faithfulness` / `answer_relevancy`。
+中文小说场景下的口径、局限、成本与待 Key 清单详见 **[RAGAS_EVAL.md](./RAGAS_EVAL.md)**。
 
 ## 🗺️ Roadmap
 

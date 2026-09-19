@@ -1,0 +1,12 @@
+# 小说RAG系统 - 可选依赖（extras，轻量安装，不强制）
+#
+# 安装方式：pip install -r requirements-extras.txt
+#
+# 说明：本文件中的依赖均为「按需安装」的可选能力，不装不影响 txt 主流程
+# （清洗 / 切片 / 向量化 / 检索 / 问答 全部可用）。仅在使用对应功能时才需要：
+#   - epub 导入（novel_rag.py ingest xxx.epub / GUI 选择 .epub）
+# 未安装时，导入 epub 会给出明确的安装提示，不会静默失败。
+
+# epub 格式支持（format_loader.py 懒加载：ebooklib 抽取章节 + BeautifulSoup 剥离 HTML）
+ebooklib>=0.18
+beautifulsoup4>=4.12.0

@@ -93,7 +93,13 @@ RULE_FUNCTIONS = {
     "合并段落": "merge_paragraphs",
     "修复编码": "fix_encoding",
     "去除拼音": "remove_pinyin",
+    "结构归一": "normalize_structure",
 }
+
+# 默认启用的规则：新切片引擎（chunking.py）以「空行/段落边界」为最高优先级
+# 切分点，而「合并段落」会把段落与场景边界抹平（只剩标题行），故默认关闭；
+# 仍可在 GUI / CLI 显式勾选，兼容旧流程。
+DEFAULT_RULES = [name for name in RULE_FUNCTIONS if name != "合并段落"]
 
 
 # ===================== 编码检测 =====================
@@ -131,6 +137,41 @@ def detect_encoding(file_path: str) -> str:
 
 
 # ===================== 清洗规则实现 =====================
+def normalize_structure(text: str) -> str:
+    """结构预处理：统一换行 → 压缩行内空白与缩进 → 连续空行归一为 1 个空行。
+
+    空行是**场景边界**（章内按空行分场景，见 chunking.parse_structure），
+    必须保留且唯一化。旧版末步归一化用 `re.sub(r'\\n\\s*\\n', '\\n', text)`
+    把空行整体抹平，下游丢失段落/场景边界，切块只能退化为纯标点找点。
+    """
+    if not text:
+        return ""
+    text = (text.replace('\r\n', '\n').replace('\r', '\n')
+                .replace('\u2028', '\n').replace('\u2029', '\n')
+                .replace('\u0085', '\n').replace('\u3000', ' '))
+    text = re.sub(r'[ \t]+', ' ', text)
+
+    lines: List[str] = []
+    blank = False
+    for line in text.split('\n'):
+        stripped = line.strip()
+        if stripped:
+            lines.append(stripped)
+            blank = False
+        elif lines and not blank:
+            lines.append('')  # 场景边界：连续空行折叠为 1 个
+            blank = True
+    while lines and not lines[0]:
+        lines.pop(0)
+    while lines and not lines[-1]:
+        lines.pop()
+    return '\n'.join(lines)
+
+
+# 内部别名（与既有 _xxx 风格一致；RULE_FUNCTIONS 映射到公共名）
+_normalize_structure = normalize_structure
+
+
 def _remove_empty_lines(text: str) -> str:
     """去除空行和仅含空白的行"""
     lines = text.split('\n')
@@ -314,7 +355,7 @@ def clean_text(
     Returns:
         清洗后的文本
     """
-    default_rules = list(RULE_FUNCTIONS.keys())
+    default_rules = list(DEFAULT_RULES)
     active_rules = rules if rules else default_rules
     total_steps = len(active_rules) + 1  # +1 for final normalization
     current_step = 0
@@ -361,17 +402,16 @@ def clean_text(
             progress_callback(current_step, total_steps, "合并段落...")
         text = _merge_paragraphs(text)
 
-    # 7. 归一化空白
+    # 7. 结构归一（统一换行 + 空行唯一化为场景边界 + 剔章首章尾空行）
     current_step += 1
     if progress_callback:
-        progress_callback(current_step, total_steps, "归一化格式...")
-    text = re.sub(r'[ \t]+', ' ', text)
-    text = re.sub(r'\n\s*\n', '\n', text)
+        progress_callback(current_step, total_steps, "结构预处理（换行/空行归一）...")
+    text = _normalize_structure(text)
 
     if progress_callback:
         progress_callback(total_steps, total_steps, "清洗完成！")
 
-    return text.strip()
+    return text
 
 
 # ===================== 文件清洗便捷函数 =====================
@@ -428,6 +468,11 @@ def clean_file(
 def get_available_rules() -> List[str]:
     """获取所有可用的清洗规则名称"""
     return list(RULE_FUNCTIONS.keys())
+
+
+def get_default_rules() -> List[str]:
+    """获取默认启用的清洗规则（排除「合并段落」，见 DEFAULT_RULES 注释）。"""
+    return list(DEFAULT_RULES)
 
 
 # ===================== 命令行入口（保留） =====================

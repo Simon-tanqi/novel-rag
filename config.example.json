@@ -10,9 +10,10 @@
     }
   ],
   "prompt_template": "你是一个专门根据提供的小说原文片段回答问题的助手。\n\n重要规则：\n1. 只使用提供的原文片段中的信息回答问题\n2. 如果原文片段中没有相关信息，就说\"根据提供的原文片段无法回答此问题\"\n3. 如果有相关信息，直接引用原文片段的内容\n4. 不要编造原文中没有的信息\n5. 不要回答与原文无关的内容\n\n以下是提供的原文片段：\n{context}\n\n用户的问题：{question}\n\n根据原文片段回答：",
-  "top_k": 3,
+  "top_k": 5,
   "enable_thinking": false,
   "enable_rerank": false,
+  "rerank_auto_detect": true,
   "reranker_model_path": "",
   "embedding_model_path": "BAAI/bge-small-zh-v1.5",
   "vector_folder": "",

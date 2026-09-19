@@ -31,7 +31,7 @@ from chat_logger import ChatLogger
 from message_bubble import MessageBubble
 from settings_window import SettingsWindow
 from project_wizard import ProjectWizard
-from utils import get_root_dir, get_compute_device
+from utils import get_root_dir, get_compute_device, resolve_rerank_policy
 
 if _GUI_AVAILABLE:
     ctk.set_appearance_mode("dark")
@@ -1109,8 +1109,13 @@ class NovelRAGApp(ctk.CTk):
             vector_path = self.current_project.get("vector_db_path", "")
             vector_file = self.current_project.get("vector_file", "")
             metadata_file = self.current_project.get("metadata_file", "")
-            reranker_path = self.config_manager.get("reranker_model_path", "")
-            enable_rerank = bool(self.config_manager.get("enable_rerank", False))
+            # 精排策略：GUI 没有命令行开关，与 CLI 共用同一套优先级
+            # （命令行/GUI 显式 > 配置 enable_rerank > 探测到本地重排模型自动启用 > 降级纯向量检索）
+            rerank_policy = resolve_rerank_policy(None, self.config_manager)
+            reranker_path = rerank_policy.get("reranker_path", "")
+            enable_rerank = rerank_policy["enable"]
+            if rerank_policy.get("note"):
+                print(rerank_policy["note"])
 
             if vector_path and os.path.exists(vector_path) and prompt_template:
                 vector_status = ""  # 向量检索状态（空=向量正常参与）
@@ -1512,9 +1517,32 @@ def main():
     """主函数"""
     try:
         # 确保必要目录存在
-        from utils import get_data_dir, get_chat_logs_dir
+        from utils import (
+            get_data_dir,
+            get_chat_logs_dir,
+            check_vector_dependencies,
+            format_vector_dependency_hint,
+        )
         get_data_dir()
         get_chat_logs_dir()
+
+        # 运行环境自检：向量检索依赖 torch / sentence-transformers。
+        # 缺失时不崩溃（仍可纯关键词模式运行），但必须显式告知用户，
+        # 否则会静默降级：建库只落 metadata.json、检索拿不到 embeddings.npy。
+        dep = check_vector_dependencies()
+        if not dep["ok"]:
+            hint = format_vector_dependency_hint(dep)
+            print(hint)
+            try:
+                root = ctk.CTk()
+                root.withdraw()
+                tkinter.messagebox.showwarning(
+                    "环境警告：向量检索不可用",
+                    hint + "\n\n请改用项目虚拟环境启动后再建库/提问。",
+                )
+                root.destroy()
+            except Exception:
+                pass
 
         app = NovelRAGApp()
         app.mainloop()

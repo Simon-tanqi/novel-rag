@@ -31,6 +31,11 @@ chat_logs/
 models/
 .hf_cache/
 
+# ===== 评测环境与产出（本地生成，不入库） =====
+.ragas_venv/
+ragas_out/
+eval_results/
+
 # ===== 测试与构建 =====
 htmlcov/
 .coverage
@@ -43,3 +48,9 @@ build/
 *.swp
 .DS_Store
 Thumbs.db
+
+# ===== 中间产物目录（脚本临时输出，不入库） =====
+temp/
+
+# ===== 发布前清理：无关内容暂存回收站（不入库） =====
+回收站/

@@ -1,11 +1,11 @@
 # -*- coding: utf-8 -*-
 """规格切片测试：递归/标点优先切片
 
-规格：
-1) 文本不足 200 字符不切分；
-2) 超过 200 字符后寻找句号/感叹号/冒号/问号，命中即切片；
-3) 距上次切分点超过 512 字符仍无上述标点则强制切片；
-4) 相邻片段设置 50 字符重叠。
+规格（token 口径，chars_per_token=1.4）：
+1) 文本不足 min_chars=210 字不切分；
+2) 超过 min 后寻找句末标点（。！？：），并在目标长度（target_chars=560）附近前后择优；
+3) 距上次切分点超过 max_chars=672 字（硬上限 480 token）仍无上述标点则强制切片；
+4) 相邻片段重叠 50-100 字（前块长度的 12.5%，句边界对齐）。
 """
 import json
 
@@ -24,7 +24,7 @@ from utils import (
 
 class TestSpecConstants:
     def test_spec_values(self):
-        assert (MIN_CHUNK_CHARS, MAX_CHUNK_CHARS, DEFAULT_OVERLAP_CHARS) == (200, 512, 50)
+        assert (MIN_CHUNK_CHARS, MAX_CHUNK_CHARS, DEFAULT_OVERLAP_CHARS) == (210, 672, 50)
 
     def test_boundary_punct_set(self):
         """切片标点集合：句号、感叹号、冒号、问号"""
@@ -33,13 +33,13 @@ class TestSpecConstants:
 
 class TestResolveSplitParams:
     def test_chunk_size_in_spec_range_kept(self):
-        assert resolve_split_params(500, 50) == (200, 500, 50)
-        assert resolve_split_params(512, 50) == (200, 512, 50)
+        assert resolve_split_params(500, 50) == (210, 500, 50)
+        assert resolve_split_params(512, 50) == (210, 512, 50)
 
     def test_chunk_size_out_of_range_falls_back_to_spec(self):
-        assert resolve_split_params(800, 50) == (200, 512, 50)
-        assert resolve_split_params(100, 50) == (200, 512, 50)
-        assert resolve_split_params(None, None) == (200, 512, 50)
+        assert resolve_split_params(800, 50) == (210, 672, 50)
+        assert resolve_split_params(100, 50) == (210, 672, 50)
+        assert resolve_split_params(None, None) == (210, 672, 50)
 
     def test_overlap_is_char_count(self):
         assert resolve_split_params(500, 0)[2] == 0

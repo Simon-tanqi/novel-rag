@@ -99,6 +99,57 @@ def get_local_commit(model_dir: Path) -> str | None:
     return None
 
 
+# snapshot_download 失败时的直连镜像兜底文件清单（覆盖 bge 系列标准布局）
+_FALLBACK_FILES = [
+    "config.json",
+    "config_sentence_transformers.json",
+    "sentence_bert_config.json",
+    "modules.json",
+    "tokenizer_config.json",
+    "vocab.txt",
+    "special_tokens_map.json",
+    "tokenizer.json",
+    "1_Pooling/config.json",
+]
+
+
+def _download_via_http(model_id: str, local_dir_abs: Path) -> bool:
+    """snapshot_download 在部分网络/镜像下失败（CAS 401、Windows 软链接等）时的兜底：
+
+    直接用 urllib 从 HF_ENDPOINT 的 resolve/main 直连下载模型文件（镜像返回普通 200，
+    不依赖 huggingface_hub 的缓存/软链接机制）。bge 系列通用文件全部下载，
+    权重文件在 model.safetensors 与 pytorch_model.bin 间自适应。
+    """
+    import urllib.request
+
+    endpoint = os.environ.get("HF_ENDPOINT", "https://hf-mirror.com")
+    base = f"{endpoint.rstrip('/')}/{model_id}/resolve/main/"
+    local_dir_abs.mkdir(parents=True, exist_ok=True)
+    files = list(_FALLBACK_FILES) + ["model.safetensors", "pytorch_model.bin"]
+    ok = 0
+    for f in files:
+        dest = local_dir_abs / f
+        if dest.exists() and dest.stat().st_size > 0:
+            ok += 1
+            continue
+        url = base + f
+        try:
+            req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+            with urllib.request.urlopen(req, timeout=120) as r, open(dest, "wb") as w:
+                while True:
+                    chunk = r.read(1 << 20)
+                    if not chunk:
+                        break
+                    w.write(chunk)
+            ok += 1
+            print(f"    ✓ http 兜底下载 {f}（{dest.stat().st_size / 1048576:.1f}MB）")
+        except Exception as e:
+            if "404" in str(e) or "HTTP Error 404" in str(e):
+                continue  # 该模型无此权重文件（如 reranker 用 pytorch_model.bin）
+            print(f"    ✗ http 兜底下载 {f} 失败：{e}")
+    return ok >= 8
+
+
 def download_model(model_id: str, local_dir: Path, *, desc: str, size_mb: int):
     """下载单个模型到本地目录"""
     MODELS_DIR.mkdir(parents=True, exist_ok=True)
@@ -118,17 +169,22 @@ def download_model(model_id: str, local_dir: Path, *, desc: str, size_mb: int):
     print(f"  ⏳ 首次使用将下载 {desc} {model_id}（≈{size_mb}MB）")
     print(f"    → 缓存到 {local_dir_abs}")
     try:
+        import inspect
         from huggingface_hub import snapshot_download
         import os as _os
 
         _os.makedirs(local_dir_abs, exist_ok=True)
-        commit = snapshot_download(
+        kwargs = dict(
             repo_id=model_id,
             local_dir=str(local_dir_abs),
-            local_dir_use_symlinks=False,  # 真实文件，不用符号链接
-            ignore_patterns=["*.md", "*.txt", "*.py"],  # 不下载 README
+            # 仅忽略 README / 脚本；保留 vocab.txt 等 tokenizer 依赖的文本资源
+            ignore_patterns=["*.md", "*.py"],
             cache_dir=str(ROOT / ".hf_cache"),  # 共享 HF 缓存（避免重复下载）
         )
+        # huggingface_hub 1.x 已移除 local_dir_use_symlinks，传入会直接 TypeError
+        if "local_dir_use_symlinks" in inspect.signature(snapshot_download).parameters:
+            kwargs["local_dir_use_symlinks"] = False  # 真实文件，不用符号链接
+        commit = snapshot_download(**kwargs)
         # 记录 commit
         manifest[model_id] = {"commit": commit, "size_mb": size_mb}
         save_manifest(manifest)

@@ -13,7 +13,7 @@ project_manager.py — 小说项目管理模块
       "vector_db_path": "./data/三体/vector_db/",
       "vector_file": "遮天_20260610.npy",  // 向量化文件名（可选）
       "metadata_file": "遮天_20260610.json",  // 元数据文件名（可选）
-      "chunk_size": 500,
+      "chunk_size": 672,
       "overlap": 50,
       "clean_rules": ["去除空行", "去除页码"],
       "custom_dirty_words": ["手打", "支持正版"],
@@ -49,7 +49,7 @@ class ProjectManager:
     # 内置 demo 项目参数（与 novel_rag.py demo 命令保持一致）
     _DEMO_NAME = "demo"
     _DEMO_SOURCE_FILE = "demo_novel.txt"
-    _DEMO_CHUNK_SIZE = 500
+    _DEMO_CHUNK_SIZE = 672
     _DEMO_OVERLAP = 50
     # 与 step1_clean.RULE_FUNCTIONS 全量规则一致（预置数据已按此清洗）
     _DEMO_CLEAN_RULES = ["去除空行", "去除页码", "去除广告", "合并段落", "修复编码", "去除拼音"]
@@ -140,7 +140,7 @@ class ProjectManager:
         self,
         name: str,
         source_path: str,
-        chunk_size: int = 512,
+        chunk_size: int = 672,
         overlap: int = 50,
         clean_rules: Optional[List[str]] = None,
         custom_dirty_words: Optional[List[str]] = None
@@ -151,7 +151,7 @@ class ProjectManager:
         Args:
             name: 小说名称
             source_path: 源文件路径
-            chunk_size: 切片硬上限（字符数，规格区间 [200, 512]，默认 512）
+            chunk_size: 切片硬上限（字符数，缺省 672 ≈ 480 token，最小 210）
             overlap: 相邻片段重叠字符数（默认 50）
             clean_rules: 清洗规则列表
             custom_dirty_words: 自定义脏数据关键词
@@ -524,7 +524,7 @@ class ProjectManager:
             "vector_db_path": str(dest_vector_db),
             "vector_file": vector_file,
             "metadata_file": metadata_file,
-            "chunk_size": 500,
+            "chunk_size": 672,
             "overlap": 50,
             "clean_rules": [],
             "custom_dirty_words": [],

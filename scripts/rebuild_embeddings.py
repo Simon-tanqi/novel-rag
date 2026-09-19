@@ -94,8 +94,9 @@ spec = resolve_split_spec(
     target_chars=disk_spec.get("target_chars"),
     overlap_ratio=disk_spec.get("overlap_ratio"),
 )
-print(f"  生效: min={spec['min_chars']} target={spec['target_chars']} "
-      f"max={spec['max_chars']} overlap={spec['overlap_chars']}/{spec['overlap_ratio']}")
+print(f"  生效: token 目标 {spec['target_tokens']} / 上限 {spec['max_tokens']} / "
+      f"最小 {spec['min_tokens']}（≈{spec['target_chars']}/{spec['max_chars']}/{spec['min_chars']} 字），"
+      f"重叠 {spec['overlap_chars']}-{spec['overlap_max_chars']} 字")
 
 # 4) 跑向量化（会重读 cleaned → 重新切片 → encode → 写 npy + 覆盖 meta，
 #    并按同一规格刷新 split_spec.json）
@@ -115,6 +116,8 @@ ok = build_vector_index_from_file(
     progress_callback=progress,
     target_chars=spec["target_chars"],
     overlap_ratio=spec["overlap_ratio"],
+    book_id=proj.get("project_id", "") or proj.get("name", ""),
+    book_title=proj.get("name", ""),
 )
 print()  # 换行
 elapsed = time.time() - t0

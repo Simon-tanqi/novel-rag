@@ -71,8 +71,8 @@ class TestBoundaryDetector:
         assert "".join(pieces) == text
 
     def test_compute_overlap_chars(self):
-        assert compute_overlap_chars(200) == OVERLAP_MIN_CHARS      # 15% < 50 → 取 50
-        assert compute_overlap_chars(1000) == 150                   # 15% > 50
+        assert compute_overlap_chars(200) == OVERLAP_MIN_CHARS      # 12.5% < 50 → 取 50
+        assert compute_overlap_chars(1000) == 125                   # 12.5% > 50
         assert compute_overlap_chars(0) == OVERLAP_MIN_CHARS
 
 

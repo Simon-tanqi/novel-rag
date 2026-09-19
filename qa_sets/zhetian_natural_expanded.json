@@ -1,0 +1,1074 @@
+{
+ "name": "zhetian",
+ "book": "遮天",
+ "note": "自然问法 QA 集（扩样版）：前 20 题为人工锚定题，其余为题面由 LLM 依原著片段生成、并逐题通过规则核验（答案须为原文连续子串、不出现在问句、答案词分布<=30 章、去重后同章同答案各留 1）的扩样题。检索评测口径：chapter 去重口径 Recall@5。",
+ "items": [
+  {
+   "id": 1,
+   "type": "scene",
+   "source": "human-anchor",
+   "question": "庞博被灵墟洞天的几位长老合力制服时，对方祭出的那件通体赤红、网丝晶莹的法宝是什么？",
+   "answer_terms": [
+    "大网"
+   ],
+   "gold_chapter": "第五十五章妖帝坟冢",
+   "evidence": "灵墟洞天的几位长老对庞博出手…化成一张赤色的大网"
+  },
+  {
+   "id": 2,
+   "type": "scene",
+   "source": "human-anchor",
+   "question": "叶凡回到石寨后答应带他们去赌石，那位得到消息激动赶来、老脸上满是波动神色的老族长是谁？",
+   "answer_terms": [
+    "张五爷"
+   ],
+   "gold_chapter": "第一百九十八章 赌石",
+   "evidence": "张五爷得知消息，快速赶来，老脸上满是波动的神色"
+  },
+  {
+   "id": 3,
+   "type": "open",
+   "source": "human-anchor",
+   "question": "十几万年前被诸圣地合力拔除、如今可能仍在暗中存续的那个传承叫什么？",
+   "answer_terms": [
+    "天庭"
+   ],
+   "gold_chapter": "第八百三十四章 天庭齐罗",
+   "evidence": "十几万年前，诸圣地合力，连极道帝兵都动用了，终于将天庭连根拔起"
+  },
+  {
+   "id": 4,
+   "type": "open",
+   "source": "human-anchor",
+   "question": "叶凡在荒古禁地中与一名旧识女子交手时，使出了一种记载于成仙路上、自古无人练成的绝世拳法，它叫什么？",
+   "answer_terms": [
+    "六道轮回拳"
+   ],
+   "gold_chapter": "第九百二十四章 李小曼凋落",
+   "evidence": "六道轮回拳！这是记载于成仙路上的不世拳法…李小曼有青铜佛像守护，依然受了伤"
+  },
+  {
+   "id": 5,
+   "type": "scene",
+   "source": "human-anchor",
+   "question": "叶凡站在八岭山上眺望四野，想起连上古的哪位仙人都埋葬在这座龙山？",
+   "answer_terms": [
+    "赤松子"
+   ],
+   "gold_chapter": "第九百五十一章 重临封禅地",
+   "evidence": "这不愧是〖中〗国古代的龙山，连上古的赤松子都埋于此地"
+  },
+  {
+   "id": 6,
+   "type": "scene",
+   "source": "human-anchor",
+   "question": "月色如水的夜晚，叶凡与老刀把子等人在血色的沙石地上接近的东荒七大生命禁区之一，是哪个地方？",
+   "answer_terms": [
+    "太初古矿"
+   ],
+   "gold_chapter": "第二百二十七章 太初神引",
+   "evidence": "眼下绝对接近太初古矿了…为东荒七大生命禁区之一"
+  },
+  {
+   "id": 7,
+   "type": "scene",
+   "source": "human-anchor",
+   "question": "那位丰神如玉、白衣胜雪的年轻男子姜逸飞，来自哪个荒古世家？",
+   "answer_terms": [
+    "姜家"
+   ],
+   "gold_chapter": "第八十三章谁人可挡",
+   "evidence": "白衣男子来自荒古世家————姜家，名为姜逸飞"
+  },
+  {
+   "id": 8,
+   "type": "scene",
+   "source": "human-anchor",
+   "question": "在牺霞原与叶凡针锋相对、头戴紫金冠的古族强者，被称为什么头衔？",
+   "answer_terms": [
+    "祖王"
+   ],
+   "gold_chapter": "第八百六十六章 六千年不死的卫易",
+   "evidence": "头戴紫金冠的祖王这是摆明要出手"
+  },
+  {
+   "id": 9,
+   "type": "open",
+   "source": "human-anchor",
+   "question": "西漠那片古老神土上留下无数传说、曾发下大宏愿徒步走过每一寸土地传教的是哪位大帝？",
+   "answer_terms": [
+    "阿弥陀佛大帝"
+   ],
+   "gold_chapter": "第八百九十六章 阿弥陀佛大帝",
+   "evidence": "阿弥陀佛大帝，拥有大智慧、大慈悲、大法力…曾发下大宏愿，徒步走过每一寸土地，亲身传教"
+  },
+  {
+   "id": 10,
+   "type": "open",
+   "source": "human-anchor",
+   "question": "叶凡眉心那道抱着小鼎、一同悟道参古经的金色光体是什么？",
+   "answer_terms": [
+    "元神"
+   ],
+   "gold_chapter": "第一千零九十六章 又见青铜仙殿",
+   "evidence": "叶凡眉心的金色小人睁开了眼晴，这么多年来，这道金色的元神抱着小鼎，一同悟道参古经"
+  },
+  {
+   "id": 11,
+   "type": "scene",
+   "source": "human-anchor",
+   "question": "那座一直在东荒大地下游走、每次出现位置都不同的仙殿叫什么？",
+   "answer_terms": [
+    "青铜仙殿"
+   ],
+   "gold_chapter": "第一千零九十六章 又见青铜仙殿",
+   "evidence": "青铜仙殿……我感应到了它的气机！…一直在东荒大地下游走"
+  },
+  {
+   "id": 12,
+   "type": "scene",
+   "source": "human-anchor",
+   "question": "在域外战场上被盖九幽合掌攥死、拥有古皇血脉的古族大圣是谁？",
+   "answer_terms": [
+    "黄金大圣"
+   ],
+   "gold_chapter": "第一千一百二十四章",
+   "evidence": "黄金大圣殒落！…这是黄金皇的后人，内蕴丝丝缕缕的古皇血"
+  },
+  {
+   "id": 13,
+   "type": "open",
+   "source": "human-anchor",
+   "question": "叶凡在仙池边观察池壁时，发现那些丝状物能吐纳呼吸，由此判断池中存在着什么？",
+   "answer_terms": [
+    "生命"
+   ],
+   "gold_chapter": "第一千零十一章 万物源鼎",
+   "evidence": "真有生命！…这个池子原本形似一个胎盘…孕育一个仙胎"
+  },
+  {
+   "id": 14,
+   "type": "scene",
+   "source": "human-anchor",
+   "question": "叶凡修炼的、号称东荒最强基础法门之一的仙典是什么？",
+   "answer_terms": [
+    "道经"
+   ],
+   "gold_chapter": "第四十章道经",
+   "evidence": "《道经》号称东荒最强的基础法门吗，乃是传说中的仙典"
+  },
+  {
+   "id": 15,
+   "type": "scene",
+   "source": "human-anchor",
+   "question": "妖帝坟冢现世时，那片废墟原本属于哪一族遗留？",
+   "answer_terms": [
+    "人族"
+   ],
+   "gold_chapter": "第五十五章妖帝坟冢",
+   "evidence": "灵墟洞天的掌门与四位太上长老并不惧怕，其中一人上前，道：这片废墟本是我人族遗留"
+  },
+  {
+   "id": 16,
+   "type": "scene",
+   "source": "human-anchor",
+   "question": "被叶凡戏称为缺德道士、扬言要走进太初古矿的那位修行者是谁？",
+   "answer_terms": [
+    "段德"
+   ],
+   "gold_chapter": "第一千一百八十一章 人太初",
+   "evidence": "段德，你嫌命长吗？叶凡喝问。缺德道士，你不会来真的吧"
+  },
+  {
+   "id": 17,
+   "type": "scene",
+   "source": "human-anchor",
+   "question": "被叶凡与黑皇称作文人墨客式骂法的对象，那只金色毛发的古佛被称为什么？",
+   "answer_terms": [
+    "斗战胜佛"
+   ],
+   "gold_chapter": "第一千一百八十一章 人太初",
+   "evidence": "斗战胜佛停了下来，看着段德，他浑身金毛闪烁"
+  },
+  {
+   "id": 18,
+   "type": "scene",
+   "source": "human-anchor",
+   "question": "叶凡斩杀银月与赤云两位祖王的消息传开后，震动天下，赤云属于哪一族？",
+   "answer_terms": [
+    "血电族"
+   ],
+   "gold_chapter": "第一千二百零九章 以战止戈",
+   "evidence": "血电族一代强者赤云横尸于野…叶凡先斩银月，又斩赤云"
+  },
+  {
+   "id": 19,
+   "type": "open",
+   "source": "human-anchor",
+   "question": "叶凡在荒古禁地被荒奴攻击后身上沾染的、让骑士接连毙命的可怕气息是什么？",
+   "answer_terms": [
+    "荒"
+   ],
+   "gold_chapter": "第一百一十章 无价古字",
+   "evidence": "身上所沾染的“荒”之气息更甚…一具白骨架崩碎后，就让十几名强大的骑士先后毙命"
+  },
+  {
+   "id": 20,
+   "type": "open",
+   "source": "human-anchor",
+   "question": "叶凡与姬紫月当年误入其中、九死一生才带出万物母气源根的地方是什么？",
+   "answer_terms": [
+    "青铜仙殿"
+   ],
+   "gold_chapter": "第一千零九十六章 又见青铜仙殿",
+   "evidence": "当年，他与姬紫月误人当中，九死一生，艰难出来，也正是因此而得到了万物母气源根"
+  },
+  {
+   "id": 21,
+   "type": "scene",
+   "source": "llm-generated+verified",
+   "question": "在神庭大军压境、有人密谋格杀圣体时，那位被老者称为不要乱来的年轻男子叫什么名字？",
+   "answer_terms": [
+    "羽默"
+   ],
+   "gold_chapter": "第三千一百一十二章 扼杀天才",
+   "evidence": "老者闻言神色凝重，道：“羽默，不要乱来，你多半杀不了他。”"
+  },
+  {
+   "id": 22,
+   "type": "scene",
+   "source": "llm-generated+verified",
+   "question": "在叶凡与火麒子兄妹激战、战场逼近天皇子时，与姬子展开巅峰对决、身穿五色金属战衣的太古皇子嗣是谁？",
+   "answer_terms": [
+    "凰虚道"
+   ],
+   "gold_chapter": "第一千零六十一章 帝子风采",
+   "evidence": "姬子大战凰虚道，这是一场真正的巅峰对决，古之大帝的亲子对抗太古皇子嗣，惊天地泣鬼神，让人们神驰目眩。"
+  },
+  {
+   "id": 23,
+   "type": "scene",
+   "source": "llm-generated+verified",
+   "question": "在圣山半山腰众人开始衰老时，姜汉忠发现最后方几人竟不受影响，其中那位与叶凡同行的女子叫什么？",
+   "answer_terms": [
+    "李小曼"
+   ],
+   "gold_chapter": "第一百零七章 登上圣山",
+   "evidence": "此外，最后方的周毅、柳依依、王子文、李小曼等人也没有丝毫变化。"
+  },
+  {
+   "id": 24,
+   "type": "scene",
+   "source": "llm-generated+verified",
+   "question": "在生命禁区中，姜家一名骑士骑坐通体赤霞闪烁的蛮兽靠近叶凡并出言嘲讽时，提到叶凡若想寻求哪个势力的庇护是白日做梦？",
+   "answer_terms": [
+    "摇光圣地"
+   ],
+   "gold_chapter": "第一百零四章禁地内六千年前的人",
+   "evidence": "你想让摇光圣地庇护吗？不要白日做梦了，到时候乖乖的替我们去采集圣药，说不定能留下全尸。"
+  },
+  {
+   "id": 25,
+   "type": "scene",
+   "source": "llm-generated+verified",
+   "question": "叶凡在斩灭姬家名宿印记后，那具无头肉身中突然冲出五道如邪神般的身影，它们所对应的修炼境界被称为什么？",
+   "answer_terms": [
+    "道宫秘境"
+   ],
+   "gold_chapter": "第一百五十六章 斩",
+   "evidence": "“道宫秘境！”"
+  },
+  {
+   "id": 26,
+   "type": "scene",
+   "source": "llm-generated+verified",
+   "question": "在古族诸王质疑人族资格、人族仅剩一位圣人独撑危局时，那位被古王请出、乘古老战车准备出手抹杀白衣神王的古族强者，称号是什么？",
+   "answer_terms": [
+    "堕天王"
+   ],
+   "gold_chapter": "第八百二十五章 封神榜显威",
+   "evidence": "此时，唯有落花可闻，天地宁静到了极点，许多强者都望向了古老战车上的堕天王。"
+  },
+  {
+   "id": 27,
+   "type": "scene",
+   "source": "llm-generated+verified",
+   "question": "在星域大战中，哪一族的老圣人化为一头黑色莽牛，踩踏星辰、角顶日月，将诸多战争工事毁掉？",
+   "answer_terms": [
+    "大力牛魔族"
+   ],
+   "gold_chapter": "第一千二百三十三章 星域大战",
+   "evidence": "“嗷吼……”大力牛魔族的老圣人战到发狂，展出法相神通，瞬间数十万丈高，化为一头黑色的莽牛，踩踏星辰，角顶日月，在宇宙中狂奔！"
+  },
+  {
+   "id": 28,
+   "type": "scene",
+   "source": "llm-generated+verified",
+   "question": "华云飞在古墓中找到圣人遗体本源后，凭借哪种当年狠人以此无敌天下的可怕天功，与叶凡和李小曼展开生死对决？",
+   "answer_terms": [
+    "吞天魔功"
+   ],
+   "gold_chapter": "第九百一十四章 对决华云飞与李小曼",
+   "evidence": "吞天魔功震古烁今，当年狠人一介凡体，却以此功而无敌天下，任你天纵奇才，盖世英雄都不是对手，全都折殒。"
+  },
+  {
+   "id": 29,
+   "type": "scene",
+   "source": "llm-generated+verified",
+   "question": "在龙山岩壁的大裂缝处，三人发现悬棺数千，其中龙口深处有一口光泽暗淡但道痕不坏的什么棺，里面还有一截不死神树枝桠？",
+   "answer_terms": [
+    "玉棺"
+   ],
+   "gold_chapter": "第九百六十九章 地仙",
+   "evidence": "其中，龙口深处，一口玉棺若隐若现，流动蒙尘的光，自上古至今始终不朽。"
+  },
+  {
+   "id": 30,
+   "type": "scene",
+   "source": "llm-generated+verified",
+   "question": "叶凡在星空中与哪个家族的人交谈时，对方以第四阶段进化液为筹码邀请他加入，并提到被天堂抢去了天命岩石？",
+   "answer_terms": [
+    "齐家"
+   ],
+   "gold_chapter": "第一千一百五十四章 齐族",
+   "evidence": "我们齐家快成功了，若不是被天堂抢去了天命岩石，恐怕神液早已汩汩而涌。"
+  },
+  {
+   "id": 31,
+   "type": "scene",
+   "source": "llm-generated+verified",
+   "question": "教皇在星空下与叶凡决战时，借助黄金圣衣从虚空中召唤出一部以神血写成的经文，号称神之约定，这部经文叫什么？",
+   "answer_terms": [
+    "神约之经"
+   ],
+   "gold_chapter": "第九百九十三章 星空下无敌",
+   "evidence": "“召唤神约之经！”教皇大吼，到了这和关头不得不持命了，尽展手段，没有底牌可留，牙砷刺目，经黄金圣衣加持，从那虚空中召唤来一部经文，号称神之约定！"
+  },
+  {
+   "id": 32,
+   "type": "scene",
+   "source": "llm-generated+verified",
+   "question": "叶凡与姬紫月进入那道由第十九代祖师祭炼成的天然石门后，姬紫月轻松过关，叶凡却被仙光传送回来，这道石门属于哪个门派？",
+   "answer_terms": [
+    "太玄门"
+   ],
+   "gold_chapter": "第一百三十二章 九秘之一",
+   "evidence": "“太玄门的这道形似石门的天然屏障，据说是第十九代祖师祭炼成的，不适合修行的人，根本无法通过。”"
+  },
+  {
+   "id": 33,
+   "type": "scene",
+   "source": "llm-generated+verified",
+   "question": "叶凡在混战中与一位手持古怪盾牌的强者对决，一枪刺碎对方武器并将其击杀，那位强者属于天皇子麾下的哪支精锐？",
+   "answer_terms": [
+    "八部神将"
+   ],
+   "gold_chapter": "第一千零六十二章 打爆天皇子",
+   "evidence": "八部神将悍不畏死，十之七八都折损在了这一役中，但生者依然在冲击，尤其是有半圣拎着圣器攻伐。"
+  },
+  {
+   "id": 34,
+   "type": "scene",
+   "source": "llm-generated+verified",
+   "question": "叶凡在巨山上摆脱齐家追踪后，发现曹家舰队追踪而至，敌方下令要活捉他，并提到他体内金色血液有大用，称他拥有什么体质？",
+   "answer_terms": [
+    "不灭金身"
+   ],
+   "gold_chapter": "第一千一百五十五章 不灭金身",
+   "evidence": "要活的，这个小子是不灭金身，体垩内有金色的血液将有大用！"
+  },
+  {
+   "id": 35,
+   "type": "scene",
+   "source": "llm-generated+verified",
+   "question": "叶凡等人离开泥沼后进入一片山岭，发现哪个势力的大圣级君上居所如今只剩圣兽王驮兰坐镇？",
+   "answer_terms": [
+    "霸龙族"
+   ],
+   "gold_chapter": "第一千二百九十九章圣灵降临",
+   "evidence": "这是霸龙族大圣级君上的居所，而今只剩下圣兽王级的驮兰坐镇。"
+  },
+  {
+   "id": 36,
+   "type": "scene",
+   "source": "llm-generated+verified",
+   "question": "灵墟洞天掌门在火山下与妖族大妖对峙时，提到东荒人族一件至宝当年被妖帝夺走，还提到哪部仙典被人拆分、丢失了重要一卷？",
+   "answer_terms": [
+    "道经"
+   ],
+   "gold_chapter": "第五十五章妖帝坟冢",
+   "evidence": "还有那名震东荒的仙典————《道经》，也是在那时被人拆分的，失去了非常重要的一卷。"
+  },
+  {
+   "id": 37,
+   "type": "scene",
+   "source": "llm-generated+verified",
+   "question": "叶凡回到昔日师门见到白发长老时，对方劝他不要好高骛远、说人一生能彻底探究一个体内关窍便已很了不起，这个被请教的老人叫什么？",
+   "answer_terms": [
+    "吴清风"
+   ],
+   "gold_chapter": "第一百一十二章 秘境",
+   "evidence": "再次见到吴清风长老，叶凡感觉很亲切，施大礼参拜，这个老人当年对他多有照拂，是一个值得让人尊敬的长者。"
+  },
+  {
+   "id": 38,
+   "type": "scene",
+   "source": "llm-generated+verified",
+   "question": "在那片人杰试炼场中，一匹赤鳞怪马先后把紫铜葫芦的主人踢飞、又把黄金犼的主人双臂打断，它这种不化人形也非神通的肉搏招式，是从谁那里软磨硬泡学来的？",
+   "answer_terms": [
+    "行字诀"
+   ],
+   "gold_chapter": "第一千二百四十五章人杰试炼场",
+   "evidence": "这是龙马从叶凡那里软磨硬泡学来的行字诀，十年征战，在星空最难走的古路上前行，让它演绎到出神人化之境。"
+  },
+  {
+   "id": 39,
+   "type": "scene",
+   "source": "llm-generated+verified",
+   "question": "在西土梵蒂冈前，叶凡与一位被众人称为“星空下第一”的强者近身搏杀，此人手持什么兵器刺来，发出震动九天的龙吟？",
+   "answer_terms": [
+    "龙枪"
+   ],
+   "gold_chapter": "第九百八十九章 神战",
+   "evidence": "手中龙枪刺来，发出一声震动九天的龙吟，且有道的和鸣。"
+  },
+  {
+   "id": 40,
+   "type": "scene",
+   "source": "llm-generated+verified",
+   "question": "在古族数名强者围攻一位堪比古皇子的人物时，有人祭出一口紫金色的大钟，钟波如海浪般粉碎天地，这件古兵叫什么？",
+   "answer_terms": [
+    "紫金大钟"
+   ],
+   "gold_chapter": "第一千零三十八章 战天下",
+   "evidence": "大钟悠悠，另有一人祭出一口紫金大钟，钟波如海浪，可清晰的见到，一圈圈扩散而出，粉碎天地！"
+  },
+  {
+   "id": 41,
+   "type": "scene",
+   "source": "llm-generated+verified",
+   "question": "在《遮天》这一章里，北域哀哭声一片，古族损失惨重，天下人纷纷猜测那位拍死诸多古圣的女子身份，有人联想到九妙神药和神蚕岭，提出她可能是太古年间的哪位古皇？",
+   "answer_terms": [
+    "神蚕古皇"
+   ],
+   "gold_chapter": "第一千一百零五章 一战天下寒",
+   "evidence": "“圣山上有九妙神药，一株分成九株，以九道神泉日日浇灌，滋养不死仙气，难道说是……神蚕古皇！”"
+  },
+  {
+   "id": 42,
+   "type": "scene",
+   "source": "llm-generated+verified",
+   "question": "在神朝崩这一章中，叶凡怒斥几个圣地来瓜分宝藏时，提到哪位大圣前往星域深处与大敌对决？",
+   "answer_terms": [
+    "卫易大圣"
+   ],
+   "gold_chapter": "第一千二百零五章 神朝崩",
+   "evidence": "直到现在战斗还未结束，卫易大圣等去星域深处与大敌对决，而我的弟子也在与诸敌拼杀，你们做了什么，迫不及待的跑到这里来瓜分宝藏！？"
+  },
+  {
+   "id": 43,
+   "type": "scene",
+   "source": "llm-generated+verified",
+   "question": "叶凡从姬家少女那里逼问出几页经文，研读后发现其开篇讲大道本体虚空、作用永无止境，这部姬家古经叫什么？",
+   "answer_terms": [
+    "虚空经"
+   ],
+   "gold_chapter": "第一百二十八章 虚空古经",
+   "evidence": "开篇几句话，点名了这本古经的所侧重的要义，大道本体是虚空的，但作用永无止境，这便是姬家的《虚空经》o"
+  },
+  {
+   "id": 44,
+   "type": "scene",
+   "source": "llm-generated+verified",
+   "question": "叶凡在瀑布旁被灵墟洞天的人认出后，那女子与同伴提起三年前在原始废墟险些被哪条蛇害死，称若非韩长老出手斩杀它，他们早已被吞食？",
+   "answer_terms": [
+    "玉角蛇"
+   ],
+   "gold_chapter": "第一百一十三章 天才是用来踩的",
+   "evidence": "在原始废墟时若不是韩长老突然出现，斩杀了那条玉角蛇，她与李云必然会被老蛇吞食。"
+  },
+  {
+   "id": 45,
+   "type": "scene",
+   "source": "llm-generated+verified",
+   "question": "王腾临死前声称叶凡永远得不到、关乎修炼元神的九秘之一，且能提前感知危机的妙法是什么？",
+   "answer_terms": [
+    "前字秘"
+   ],
+   "gold_chapter": "第一千零八十二章 乱古",
+   "evidence": "“你得不到，前字秘修划神，你控制不了我，哈哈哈”．九秘就此失传吧，万古绝响！"
+  },
+  {
+   "id": 46,
+   "type": "scene",
+   "source": "llm-generated+verified",
+   "question": "叶凡在圣药影响下神智不清时，与哪位号称绝代双骄之一的女子多次纠缠，甚至将她杀死数次又复活？",
+   "answer_terms": [
+    "梵仙"
+   ],
+   "gold_chapter": "第一千一百六十四章 原始",
+   "evidence": "“啊，你这低贱的苦修士，竟然杀了我数次！”梵仙不忿、惊叫，每一次复苏时有短暂的清明，气到娇躯颤抖。"
+  },
+  {
+   "id": 47,
+   "type": "scene",
+   "source": "llm-generated+verified",
+   "question": "叶凡夜袭反杀宣家子弟后，远处矮山上观望的老仆见封印消散，震惊于有人竟杀了一位大成王者，这个老仆随谁一同眺望？",
+   "answer_terms": [
+    "曹清"
+   ],
+   "gold_chapter": "第一千一百三十九章 进化",
+   "evidence": "远处，一座矮山上，曹清向这里眺望。在他的身旁还有一个老仆人，见到封印之力消失，神色一震。"
+  },
+  {
+   "id": 48,
+   "type": "scene",
+   "source": "llm-generated+verified",
+   "question": "张五爷说千年前一位先人违背祖训，手持哪部书破开紫山走了进去？",
+   "answer_terms": [
+    "源天书"
+   ],
+   "gold_chapter": "第一百八十六章 天书",
+   "evidence": "手持《源天书》，破开紫山走了进去，唉！"
+  },
+  {
+   "id": 49,
+   "type": "scene",
+   "source": "llm-generated+verified",
+   "question": "叶凡在开天辟地劫中铸鼎时，想到自己曾见过一座古朴残鼎，拂去斑驳后上面显化万灵景象，那座残鼎叫什么名字？",
+   "answer_terms": [
+    "绿鼎"
+   ],
+   "gold_chapter": "第一千二百七十七章成圣",
+   "evidence": "叶凡怔住了，这万物皆现的景象怎是如此的相似，他心念一动，将铸鼎的过程放缓，思忖到了绿鼎。"
+  },
+  {
+   "id": 50,
+   "type": "scene",
+   "source": "llm-generated+verified",
+   "question": "在北斗古族与永恒主星的大战中，永恒主星一方有位强者身穿紫色战衣、手持巨剑，还驾驭圣人王机甲，将三头六臂的祖王斩杀，天元城众人惊叹他是哪位圣者的三弟子？",
+   "answer_terms": [
+    "銮封圣者"
+   ],
+   "gold_chapter": "第一千二百二十八章 北斗战永恒",
+   "evidence": "“銮封圣者的三弟子果然强大，将那三头六臂的圣兽击杀了，又将一位生有羽翅的猛禽腰斩，鲜血洗长空，真是威猛！”"
+  },
+  {
+   "id": 51,
+   "type": "scene",
+   "source": "llm-generated+verified",
+   "question": "叶凡逃离大雷音寺遗址后，发现废墟中显化的魔影其实是源自地基的什么镇寺存在？",
+   "answer_terms": [
+    "镇寺魔神"
+   ],
+   "gold_chapter": "第九百二十七章 佛寺下的地狱",
+   "evidence": "这是镇寺魔神！这一切肯定是源自地基，这么多年过去了，鳄祖脱困，崩坏了地下基石，让释迦牟尼布下的后手显化世间。"
+  },
+  {
+   "id": 52,
+   "type": "scene",
+   "source": "llm-generated+verified",
+   "question": "在真贤城外的山脉深处，万族修士齐聚关注天被捅破的大事时，钟声从哪座山响起，让十方生灵叩首、百病皆消？",
+   "answer_terms": [
+    "须弥山"
+   ],
+   "gold_chapter": "第一千零六十四章 捅破了天",
+   "evidence": "“当……。若这一日，悠悠钟声响彻须弥山，浩荡也不知多少万里……整座大雷音寺都散发灿烂光辉，佛光普照……十方生灵叩首，百病皆消。“钟声终于响了。”"
+  },
+  {
+   "id": 53,
+   "type": "scene",
+   "source": "llm-generated+verified",
+   "question": "摇光圣女在南域苦寻一个多月后，于混战中催动一件碧玉法器，这件能发出震天铃声、释放绿光涟漪的宝物叫什么？",
+   "answer_terms": [
+    "碧玉铃"
+   ],
+   "gold_chapter": "第一百八十二章 都是胸衣惹的祸",
+   "evidence": "身前的碧玉铃快放大，直径达到十丈，铃声震天。"
+  },
+  {
+   "id": 54,
+   "type": "scene",
+   "source": "llm-generated+verified",
+   "question": "在紫山深处，叶凡于钟形大殿中听到一个虚弱声音传音，此人自称被困油尽灯枯，却曾将九秘之一传出，他是什么称号？",
+   "answer_terms": [
+    "神王"
+   ],
+   "gold_chapter": "第一百九十六章 无始经",
+   "evidence": "“你……怎么乱走……”忽然，神王姜太虚的声音传来，依然虚弱的要命。"
+  },
+  {
+   "id": 55,
+   "type": "scene",
+   "source": "llm-generated+verified",
+   "question": "叶兄在轮海之上冲破天阙之门、踏入新天地时，体内五气朝天，五道如龙的神烟冲霄而上，他进入的这个人体秘境叫什么？",
+   "answer_terms": [
+    "道宫"
+   ],
+   "gold_chapter": "第二百零五章 人之天日",
+   "evidence": "叶兄大步前行，越来越近，他早已积累足够，一朝破人道宫，并非梦花幻景。"
+  },
+  {
+   "id": 56,
+   "type": "scene",
+   "source": "llm-generated+verified",
+   "question": "大黑狗在众人告别时吐出一个小葫芦，里面装着从紫山仙药上取来的几滴精血，这东西被称作什么？",
+   "answer_terms": [
+    "不死神凰药"
+   ],
+   "gold_chapter": "第九百二十二章 登五色祭坛终战",
+   "evidence": "“这是无始大帝的不死神凰药！”大黑狗道。"
+  },
+  {
+   "id": 57,
+   "type": "scene",
+   "source": "llm-generated+verified",
+   "question": "大夏皇族持哪件极道帝兵横空震慑群鬼、率先进入中州祖脉第三十五层小世界？",
+   "answer_terms": [
+    "太皇剑"
+   ],
+   "gold_chapter": "第九百一十章 二十几万年前的道童再现",
+   "evidence": "大夏的太皇剑横在空中，如一道永恒的仙光，震慑了所有人，所向披靡，大夏一群皇族当先进人地下。"
+  },
+  {
+   "id": 58,
+   "type": "scene",
+   "source": "llm-generated+verified",
+   "question": "叶凡在交换神材时，取出了一大块让元古和后方老人都震惊的炼兵瑰宝，这种连圣人王都难以炼化的材料叫什么？",
+   "answer_terms": [
+    "大罗银精"
+   ],
+   "gold_chapter": "第八百五十二章 神材",
+   "evidence": "这么一大块，可不是大白菜，不是废铜烂铁，而是大罗银精看，比之他们皇族宝庠中的银精储备都见得少。"
+  },
+  {
+   "id": 59,
+   "type": "scene",
+   "source": "llm-generated+verified",
+   "question": "老疯子在大青石上拍出神秘图案后，叶凡认出那是什么步法？",
+   "answer_terms": [
+    "神秘步法"
+   ],
+   "gold_chapter": "第一百四十三章 秘",
+   "evidence": "“神秘格步法！”叶凡大吃一惊，这幅图案乃是繁复的道纹，非常的深奥与艰涩。"
+  },
+  {
+   "id": 60,
+   "type": "scene",
+   "source": "llm-generated+verified",
+   "question": "在那座太古道场中，一个年轻男子靠替死术逃过死劫、后来在广场外与天荒十三骑二号首领低语的人是谁？",
+   "answer_terms": [
+    "燕赤峰"
+   ],
+   "gold_chapter": "第一千二百七十九章 成圣归来",
+   "evidence": "被拥簇在当中的年轻人正是燕赤峰，他在太古道场中以替死术逃过一劫。"
+  },
+  {
+   "id": 61,
+   "type": "scene",
+   "source": "llm-generated+verified",
+   "question": "在太初古矿星辉沉浮、古王胆寒那章中，外界古王提到曾与谁在十几万年前于禁区外有过一场大战，而今回响于矿中的声音便是此人？",
+   "answer_terms": [
+    "大成圣体"
+   ],
+   "gold_chapter": "第八百九十章 进太初古矿",
+   "evidence": "大成圣体的声音在古矿中回响，他像是在漫步，观遍了每一个角落，让人遗憾，无人可知他见到了什么。"
+  },
+  {
+   "id": 62,
+   "type": "scene",
+   "source": "llm-generated+verified",
+   "question": "叶凡在登天路途中降落在骨山上，从黑色头骨中抽离出鬼火并认真观摩，发现那其实是由秩序神链交织而成的残缺生命奥义，他借此悟道时联系起了哪种秘术？",
+   "answer_terms": [
+    "者字秘"
+   ],
+   "gold_chapter": "第一千一百二十五章 登天路",
+   "evidence": "竟然大手启发，对生命的理解加深了不少，同者字秘联系起来，更是一阵思索，悟道了很久。"
+  },
+  {
+   "id": 63,
+   "type": "scene",
+   "source": "llm-generated+verified",
+   "question": "船老大打算把重伤变形的叶凡送到城里哪个帮派去，好让他被转卖去北域挖源？",
+   "answer_terms": [
+    "快活帮"
+   ],
+   "gold_chapter": "第一百七十六章 横渡北域",
+   "evidence": "船老大围绕着叶凡转了一围，道：“不能白救他，城内的‘快活帮&#039;不是在四处招人吗，将他卖到那里去，也算是帮他谋生计。"
+  },
+  {
+   "id": 64,
+   "type": "scene",
+   "source": "llm-generated+verified",
+   "question": "叶凡在对抗人形闪电时，看到一位惊艳万古的女性大帝降下，与少年大帝重合将其化掉，这位女大帝一指点出的、照耀古今的绝世功法叫什么？",
+   "answer_terms": [
+    "飞仙诀"
+   ],
+   "gold_chapter": "第九百九十九章 狠人大帝来了",
+   "evidence": "狠人对他出手了，一指点来，飞仙诀照耀古今，立劈了这片宇宙，毫不留情，要将他粉碎。"
+  },
+  {
+   "id": 65,
+   "type": "scene",
+   "source": "llm-generated+verified",
+   "question": "摇光圣地的修士在第十五矿区目睹一位神秘老妪徒手收走百米高的金字塔后，她自称是什么身份？",
+   "answer_terms": [
+    "普通的老太太"
+   ],
+   "gold_chapter": "第一百八十一章 六千年不死",
+   "evidence": "“我只是一个普通的老太太。”老妪看着姚曦，慈祥的笑了笑「道：“你福缘不浅。”"
+  },
+  {
+   "id": 66,
+   "type": "scene",
+   "source": "llm-generated+verified",
+   "question": "叶凡在逃离神秘强者追杀时，施展了老疯子传授的哪种速度极快的无上秘术？",
+   "answer_terms": [
+    "步法"
+   ],
+   "gold_chapter": "第一百五十章 吼动山河",
+   "evidence": "老疯子传给叶凡的步法，乃是一种无上秘术，具有不可思议之伟力，度极快，时间不长，已经在十里之外。"
+  },
+  {
+   "id": 67,
+   "type": "scene",
+   "source": "llm-generated+verified",
+   "question": "叶凡在竹园中准备炼化进化液时，被一个银瞳干枯老者封了园子，对方身穿银色金属战甲，这老者来自哪个势力，叶凡后来才知晓其身份？",
+   "answer_terms": [
+    "永恒国度"
+   ],
+   "gold_chapter": "第一千一百三十八章 圣人机甲",
+   "evidence": "“年轻人不错，道行不浅，不要说仙羽星海，将来永恒国度都可能会有你一席之地。”"
+  },
+  {
+   "id": 68,
+   "type": "scene",
+   "source": "llm-generated+verified",
+   "question": "石寨中那个有点愣、力气很大的青年，在姐姐被流寇掳走后冲出来哭喊着要人的角色叫什么？",
+   "answer_terms": [
+    "二愣子"
+   ],
+   "gold_chapter": "第一百八十七章 帝玉",
+   "evidence": "二愣子双眼通红，冲了过来，道：“陈大胡子，我姐姐呢，还我姐姐来。”"
+  },
+  {
+   "id": 69,
+   "type": "scene",
+   "source": "llm-generated+verified",
+   "question": "叶凡和庞博讨论金色苦海时，提到哪个修炼之地不能威慑东荒，因此决定不把秘密告诉长老？",
+   "answer_terms": [
+    "灵墟洞天"
+   ],
+   "gold_chapter": "第四十七章 艰难",
+   "evidence": "一是因为灵墟洞天并不能威慑东荒，消息一旦走漏，我必死无疑。"
+  },
+  {
+   "id": 70,
+   "type": "scene",
+   "source": "llm-generated+verified",
+   "question": "叶凡从域外归返故土，在夜间的月球上感应到哪种圣力，并由此联想到古书对月亮的称呼？",
+   "answer_terms": [
+    "太阴圣力"
+   ],
+   "gold_chapter": "第九百三十四章 降临地球",
+   "evidence": "叶凡动容他感受到了一丝太阴圣力，藏于月亮岩石缝隙间，可是仔细去捕捉，却发现微手其微。"
+  },
+  {
+   "id": 71,
+   "type": "scene",
+   "source": "llm-generated+verified",
+   "question": "李德生天生拥有哪种罕见眼睛，能看透阴冥、偶尔见到特别之物，连老刀把子都感到吃惊？",
+   "answer_terms": [
+    "阴冥眼"
+   ],
+   "gold_chapter": "第二百二十七章 太初神引",
+   "evidence": "我的左眼……，…是天生的阴冥眼，偶尔能够看到一些特别的东西。"
+  },
+  {
+   "id": 72,
+   "type": "scene",
+   "source": "llm-generated+verified",
+   "question": "叶凡在竹林中遇到几个年轻修士，他们来自哪个门派，其中一人还认出他并叫他小乞丐？",
+   "answer_terms": [
+    "紫阳洞天"
+   ],
+   "gold_chapter": "第八十九章紫阳洞天",
+   "evidence": "正是前几日相遇的那几个紫阳洞天的弟子，不过李小曼并未在当中。"
+  },
+  {
+   "id": 73,
+   "type": "scene",
+   "source": "llm-generated+verified",
+   "question": "叶凡在神土古洞的崖壁上辨认出三行近乎磨灭的字迹，认出那是某位古之大帝的笔迹，他曾在紫山石书上见过同名经文，这位大帝是谁？",
+   "answer_terms": [
+    "无始大帝"
+   ],
+   "gold_chapter": "第二百一十一章 又见无始",
+   "evidence": "那三行字太熟悉了．他决不可能忘恶．这是无始大帝的笔迹！"
+  },
+  {
+   "id": 74,
+   "type": "scene",
+   "source": "llm-generated+verified",
+   "question": "叶凡与姬紫月进入那处神秘遗迹，面对刻有古字的黑白两扇门户时，他依据古籍中阴阳互逆的道理，最终选择了哪扇看似凶险的门作为真正的生路？",
+   "answer_terms": [
+    "死门"
+   ],
+   "gold_chapter": "第一百二十五章 照破山河万朵",
+   "evidence": "最后他指向死门，道：“这才是真正的生路！”"
+  },
+  {
+   "id": 75,
+   "type": "scene",
+   "source": "llm-generated+verified",
+   "question": "在荒古禁地外的山脉中，一个白发苍苍、神志不清的老人突然出现并预言所有人都会死，这个被叶凡远远甩在后面的老人被称为什么？",
+   "answer_terms": [
+    "老疯子"
+   ],
+   "gold_chapter": "第一百零二章预言成真",
+   "evidence": "白发苍苍的老疯子突然出现，就在叶凡的不远处，他居然也追了下来。"
+  },
+  {
+   "id": 76,
+   "type": "scene",
+   "source": "llm-generated+verified",
+   "question": "叶凡在青霞门闭关半月，炼化千斤源后，体内哪个神藏状若未开莲花、始终未能蜕变成神祗？",
+   "answer_terms": [
+    "心之神藏"
+   ],
+   "gold_chapter": "第二百一十八章 神藏晋升",
+   "evidence": "整整半个月，叶凡都在闭关小体内的天日一一心之神藏，越发的火红，状若未开之莲花，化生出一道道精气，然而却始终未蜕变成神祗。"
+  },
+  {
+   "id": 77,
+   "type": "scene",
+   "source": "llm-generated+verified",
+   "question": "叶凡在万妖谷长住两个月后，向三谷主打听上古仙人曾在蜀山传道并留下剑修一脉，这位仙人是谁？",
+   "answer_terms": [
+    "赤松子"
+   ],
+   "gold_chapter": "第九百六十一章 孙悟空",
+   "evidence": "三谷主笑了，告诉叶凡赤松子并非蜀人，当是浙江人氏，但却来过蜀山传道，留下了道统。"
+  },
+  {
+   "id": 78,
+   "type": "scene",
+   "source": "llm-generated+verified",
+   "question": "那个人族圣体在北域创建、传遍天下的教派叫什么名字？",
+   "answer_terms": [
+    "天庭"
+   ],
+   "gold_chapter": "第八百五十章 立教",
+   "evidence": "半个月后，北域传来消息，人族圣体创教，名为天庭，传遍天下。"
+  },
+  {
+   "id": 79,
+   "type": "scene",
+   "source": "llm-generated+verified",
+   "question": "在《遮天》第八百四十三章中，姬紫月从姬家藏经阁偷出绝密资料交给叶凡，其中提到摇光圣子只用一只手便镇压了历代圣子联手，之后与哪件极道帝兵共鸣九天九夜？",
+   "answer_terms": [
+    "龙纹黑金鼎"
+   ],
+   "gold_chapter": "第八百四十三章 一个时代的落幕",
+   "evidence": "“摇光圣子只用一只手就镇压了两千多年来摇光各个时代的圣子的联手攻伐，轻松上位，他所做的第一件事就是与龙纹黑金鼎共鸣，在这世间最不可思议的极道帝兵面前站了九天九夜。”"
+  },
+  {
+   "id": 80,
+   "type": "scene",
+   "source": "llm-generated+verified",
+   "question": "圣皇子因水髓母被截走而震怒，得知是哪个太古皇族势力所为后，开始半路截杀对方外出之人并洗劫矿物？",
+   "answer_terms": [
+    "火麟洞"
+   ],
+   "gold_chapter": "第一千一百八十五章 神性矿物乱起",
+   "evidence": "圣皇子自然怒了，觉得火麒子欺人太甚，开始在半路截杀火麟洞外出的人，大肆洗劫神信g矿物。"
+  },
+  {
+   "id": 81,
+   "type": "scene",
+   "source": "llm-generated+verified",
+   "question": "叶凡在第八重火域躲避姬家强者时，听到前方巨石山洞传来不祥之声，洞口留有黑羽，那是什么生物发出的叫声？",
+   "answer_terms": [
+    "乌鸦"
+   ],
+   "gold_chapter": "第一百六十六章 暴风雨中",
+   "evidence": "呱”叶凡再次听到了乌鸦的叫声，如金石裂空，清晰无比这时，他看到前方有一块巨石，高达百米，如一座小山一般，不祥的声音正是源于哪里。"
+  },
+  {
+   "id": 82,
+   "type": "scene",
+   "source": "llm-generated+verified",
+   "question": "斗战胜佛镇杀昆宙大圣后，神蚕一族的老族长邀请他和浑拓等大圣去哪个地方一叙？",
+   "answer_terms": [
+    "神蚕岭"
+   ],
+   "gold_chapter": "第一千零七十三章 黑皇大哭",
+   "evidence": "“请给位道兄到神蚕岭一叙。”神蚕一族的老族长邀请斗战胜佛、浑拓大圣、黄金王、万龙巢的大圣等。"
+  },
+  {
+   "id": 83,
+   "type": "scene",
+   "source": "llm-generated+verified",
+   "question": "叶凡在瑶池旧地漫步时，被一位曾目睹叶瞳斩杀万初圣子、与安妙依颜如玉并称东荒最美的女子认出，她是谁？",
+   "answer_terms": [
+    "瑶池圣女"
+   ],
+   "gold_chapter": "第一千零三十四章 人瑶池",
+   "evidence": "正是瑶池圣女，与安妙依、颜如玉并到为东荒最美女子，连中州的各大皇族，甚至连古族都想联姻而不成。"
+  },
+  {
+   "id": 84,
+   "type": "scene",
+   "source": "llm-generated+verified",
+   "question": "叶凡在矿洞中遭遇一只上半身似人、下半身为蛇体且长满黑毛的庞然大物，他心中对这种从源中意外封存至今的生物称呼是什么？",
+   "answer_terms": [
+    "太古生物"
+   ],
+   "gold_chapter": "第一百九十五章 太古生物",
+   "evidence": "被惊动出世的太古生物，活不了多长时间，不在源中，很快就会腐朽。"
+  },
+  {
+   "id": 85,
+   "type": "scene",
+   "source": "llm-generated+verified",
+   "question": "段德向众人透露，那位在八千年前名震中州、晚年进入东荒的盖世人物究竟是谁？",
+   "answer_terms": [
+    "盖九幽"
+   ],
+   "gold_chapter": "第三百三十五章 凰血动人心",
+   "evidence": "他是八千年前络盖九幽。"
+  },
+  {
+   "id": 86,
+   "type": "scene",
+   "source": "llm-generated+verified",
+   "question": "叶凡将要开启五色祭坛横渡星空时，小囡囡现身引动十方关注，她之前失踪多年，被许多人认出是跟在叶凡身边的小女孩，而分析认为哪个地方会成为杀生血地之一？",
+   "answer_terms": [
+    "天断山脉"
+   ],
+   "gold_chapter": "第八百八十一章 血腥杀局拉开大幕",
+   "evidence": "南域拍卖行与中域天断山脉必会成为杀生血地！"
+  },
+  {
+   "id": 87,
+   "type": "scene",
+   "source": "llm-generated+verified",
+   "question": "叶凡在星空中观察被移开缝隙的古棺时，认出这是神话时代葬于九天之上的九层棺椁，此棺的专有称呼是什么？",
+   "answer_terms": [
+    "神灵九重棺"
+   ],
+   "gold_chapter": "第一千一百七十一章 虚空大帝",
+   "evidence": "神灵九重棺！叶凡震撼，果真如他所猜侧的那般，这。巨棺非常不简单，是无尽岁月前的神灵棺椁，本应葬于九天之上。"
+  },
+  {
+   "id": 88,
+   "type": "scene",
+   "source": "llm-generated+verified",
+   "question": "在圣山上，叶凡看到第三个血肉之躯的荒奴时，那人头顶悬着一座九层高的古塔，这座塔叫什么名字？",
+   "answer_terms": [
+    "荒塔"
+   ],
+   "gold_chapter": "第一百零九章 圣药",
+   "evidence": "“荒塔可镇粟仙人，绿铜也是至宝，也许有这样的威慑力。"
+  },
+  {
+   "id": 89,
+   "type": "scene",
+   "source": "llm-generated+verified",
+   "question": "盖九幽在对抗黄金铜与万龙铃时，以自身发光奏出的那种可力敌古皇兵、他亲手开创的大道神音叫什么？",
+   "answer_terms": [
+    "渡劫仙曲"
+   ],
+   "gold_chapter": "第一千一百二十二章 渡劫仙曲",
+   "evidence": "渡劫仙曲！这是他开创的道，洞悉世界本源，奏出大道神音，聆听仙的秘密，在这红尘中渡劫。"
+  },
+  {
+   "id": 90,
+   "type": "scene",
+   "source": "llm-generated+verified",
+   "question": "叶凡在火域中听到兽吼后潜行而出，见到一位紫衣女子与一位来自太玄门的蓝衣男子一同降落在地，这位蓝衣男子是谁？",
+   "answer_terms": [
+    "华云飞"
+   ],
+   "gold_chapter": "第一百六十八章 凛然",
+   "evidence": "天空中，一个蓝衣男子丰神如玉，衣袂猎猎，如拈花之神祗「随她一起落在地上，正是太玄门的华云飞。"
+  },
+  {
+   "id": 91,
+   "type": "scene",
+   "source": "llm-generated+verified",
+   "question": "叶凡等人在古棺前被上古仙人的余威压得跪伏，打开黄泥棺后却发现里面空空如也，只见到洞壁和棺内刻字，提到哪位上古仙人曾在此揭秘九十九龙山之散？",
+   "answer_terms": [
+    "容成氏"
+   ],
+   "gold_chapter": "第九百六十九章 古星枯竭的原因",
+   "evidence": "洞壁所记，并不是此地的小龙山群，而是真正的就九十九上古龙山，不曾想地仙容成氏在此揭秘。"
+  },
+  {
+   "id": 92,
+   "type": "scene",
+   "source": "llm-generated+verified",
+   "question": "叶凡感应到那座在东荒大地下游走、与狠人大帝某一世蜕变失败有关的移动仙殿，它叫什么？",
+   "answer_terms": [
+    "青铜仙殿"
+   ],
+   "gold_chapter": "第一千零九十六章 又见青铜仙殿",
+   "evidence": "“青铜仙殿……我感应到了它的气机！”叶凡露出不可思议的神色，这座可以移动的仙殿一直在东荒大地下游走，每一次出现的位置都不同，有关于仙的秘辛。"
+  },
+  {
+   "id": 93,
+   "type": "scene",
+   "source": "llm-generated+verified",
+   "question": "段德在第九百一十一章中认出两个道童的真实身份后，惊呼他们是什么未化的存在，连冥王宫都镇压不住？",
+   "answer_terms": [
+    "阴神"
+   ],
+   "gold_chapter": "第九百一十一章阴神",
+   "evidence": "“阴神未化，他们还在，天啊……”段德彻底心凉了，直接言明，现在别说阎罗土、黄泉水、九幽胎不管用了，就是搬来一座冥王宫都不见得能镇压住。"
+  },
+  {
+   "id": 94,
+   "type": "scene",
+   "source": "llm-generated+verified",
+   "question": "传说中恒宇大帝为祭炼极道武器，曾前往哪处由天日之子坠地而成的至阳绝地？",
+   "answer_terms": [
+    "堕日岭"
+   ],
+   "gold_chapter": "第二百三十四章 极道凰血赤金",
+   "evidence": "堕日岭，传说是天日之子坠地而成，是至阳至刚的绝地。"
+  },
+  {
+   "id": 95,
+   "type": "scene",
+   "source": "llm-generated+verified",
+   "question": "叶凡向梵宙打听古镜来历时，得知八年前有一位惊艳的苦修士曾到过这片星域并与莫名生物大战，这位修士是谁？",
+   "answer_terms": [
+    "姬皓月"
+   ],
+   "gold_chapter": "第一千一百六十一章 炙手可热",
+   "evidence": "叶凡眸光湛湛，他通过梵宙的讲述，得悉那绝对是姬皓月无疑，当见到其画像时更是确信无疑。"
+  },
+  {
+   "id": 96,
+   "type": "scene",
+   "source": "llm-generated+verified",
+   "question": "许琼的女儿在客厅里被母亲叫回自己房间时，这个活泼少女的名字是什么？",
+   "answer_terms": [
+    "许晔"
+   ],
+   "gold_chapter": "第九百三十五章 无法承受的结局",
+   "evidence": "进人客厅后，许琼道：“许晔，去你自己的房间，我与这位叔叔说些话。”"
+  },
+  {
+   "id": 97,
+   "type": "scene",
+   "source": "llm-generated+verified",
+   "question": "叶凡在耶路撒冷显化神迹、度化众多信徒时，小天师张清扬宣布他拥有了什么道位称号？",
+   "answer_terms": [
+    "天帝"
+   ],
+   "gold_chapter": "第九百八十七章 天帝",
+   "evidence": "张清扬自作主张，在这一刻宣布了叶凡的道位，号称天帝，一时间山呼声不绝于耳，响彻天地。"
+  }
+ ]
+}

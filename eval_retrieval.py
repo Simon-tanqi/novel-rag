@@ -1,8 +1,9 @@
 """
 eval_retrieval.py — RAG 检索质量评估工具
 
-用「问题-预期命中章节」QA 集量化召回效果，输出 Recall@k：
+用「问题-预期命中章节」QA 集量化召回效果，输出 Recall@k 与 MRR：
     Recall@k = 命中「预期章节」的问题数 / 总问题数
+    MRR      = 首个命中「预期章节」的排名倒数均值（越高说明命中越靠前）
 
 用法:
     # 对某个已构建项目评估（需先 ingest，走与 ask 相同的检索通道）
@@ -13,9 +14,12 @@ eval_retrieval.py — RAG 检索质量评估工具
 
 QA 集格式（JSON）:
     [
-        {"question": "沈青在剑庐学到的第一课是什么？", "chapter": "第二章 剑庐第一课"},
+        {"question": "沈青在剑庐学到的第一课是什么？", "chapter": "第二章 剑庐第一课", "answer": "…"},
         ...
     ]
+
+调参用法：切片规格（min/target/max/overlap）变更后重建向量库，再跑本脚本对比
+Recall@k 与 MRR；answer 字段保留给上层做生成质量的人工／LLM 判分。
 """
 import argparse
 import json
@@ -98,8 +102,9 @@ def load_qa(qa_file: Optional[str]) -> List[Dict]:
 
 
 def run_eval(retriever: RAGRetriever, qa: List[Dict], top_k_values: List[int]) -> dict:
-    """逐题检索，统计各 top_k 下的 Recall@k 与逐题命中明细"""
+    """逐题检索，统计各 top_k 下的 Recall@k、MRR 与逐题命中明细"""
     recall = {k: 0 for k in top_k_values}
+    ranks = []  # 每题首个命中预期章节的排名（1-based，未命中记 0），用于 MRR
     details = []
 
     for i, item in enumerate(qa, 1):
@@ -121,10 +126,15 @@ def run_eval(retriever: RAGRetriever, qa: List[Dict], top_k_values: List[int]) -
                 recall[k] += 1
             per_k[f"recall@{k}"] = hit
 
+        first_rank = next((r for r, ch in enumerate(hit_chapters, 1)
+                           if _hit_in_expected(ch, expected)), 0)
+        ranks.append(first_rank)
+
         details.append({
             "question": question,
             "answer": item.get("answer", ""),
             "expected": expected,
+            "first_hit_rank": first_rank,
             "top_chapters": hit_chapters[:max_k],
             **per_k,
         })
@@ -133,20 +143,25 @@ def run_eval(retriever: RAGRetriever, qa: List[Dict], top_k_values: List[int]) -
         print(f"      预期: {expected} | 命中: {hit_chapters[:3]}")
 
     total = len(details)
+    mrr = (sum(1.0 / r for r in ranks if r) / total) if total else 0.0
     print("\n" + "=" * 52)
     print(f"QA 总数: {total}")
     for k in top_k_values:
         if total:
             print(f"  Recall@{k:<2} = {recall[k]}/{total} = "
                   f"{recall[k] / total:.1%}")
+    print(f"  MRR      = {mrr:.3f}"
+          f"（命中题首命中平均排名 {('%.2f' % (1 / mrr)) if mrr else '—'}）")
     print("=" * 52)
     return {"recall": {k: (recall[k] / total if total else 0)
-                       for k in top_k_values}, "details": details}
+                       for k in top_k_values},
+            "mrr": mrr,
+            "details": details}
 
 
 def main():
     parser = argparse.ArgumentParser(
-        description="RAG 检索质量评估（Recall@k）",
+        description="RAG 检索质量评估（Recall@k / MRR）",
     )
     parser.add_argument("--name", help="项目名（默认最近使用的项目）")
     parser.add_argument("--qa", default=None, help="QA 集 JSON 路径（默认内置 demo QA）")

@@ -42,7 +42,7 @@ class ProjectWizard(ctk.CTkToplevel):
         # 状态变量
         self.project_name = ctk.StringVar()
         self.source_path = ctk.StringVar()
-        self.chunk_size = ctk.IntVar(value=512)
+        self.chunk_size = ctk.IntVar(value=672)
         self.overlap = ctk.IntVar(value=50)
         self.is_processing = False
 
@@ -420,7 +420,9 @@ class ProjectWizard(ctk.CTkToplevel):
             vector_db_path = get_vector_db_path(name)
 
             # 获取嵌入模型配置：本地模型目录 或 HF 模型名（如 BAAI/bge-small-zh-v1.5）
-            # 无需在此校验存在性——step2 会按需自动下载或降级为关键词检索
+            # 注意：显式指定嵌入模型却加载不到时，step2 直接返回失败（不产出半成品索引）；
+            # 仅当配置置空、用户主动选择纯关键词模式时才只落 metadata.json。因此此处
+            # 不能预设 status=ready，必须按落盘结果（embeddings.npy 是否存在）判定。
             embedding_model_path = ""
             if self.config_manager:
                 embedding_model_path = self.config_manager.get("embedding_model_path", "")
@@ -435,23 +437,38 @@ class ProjectWizard(ctk.CTkToplevel):
                 overlap=overlap,
                 output_dir=vector_db_path,
                 embedding_model_path=embedding_model_path if embedding_model_path else None,
-                progress_callback=embed_progress
+                progress_callback=embed_progress,
+                book_id=project_id,
+                book_title=name,
             )
 
             if not success:
                 raise Exception("向量化失败")
+
+            # 真实落盘校验：只有 embeddings.npy 落地才算 ready。
+            # 否则（用户置空模型走纯关键词模式）落 keyword_only，
+            # 避免「状态显示已就绪、检索却只走关键词」的静默降级。
+            has_vectors = os.path.exists(os.path.join(vector_db_path, "embeddings.npy"))
+            real_status = "ready" if has_vectors else "keyword_only"
 
             # 更新项目状态
             self.project_manager.update_project(
                 project_id,
                 {
                     "vector_db_path": vector_db_path,
-                    "status": "ready"
+                    "status": real_status
                 }
             )
 
             # 完成
-            self._update_progress(100, "✅ 项目创建完成！")
+            if has_vectors:
+                self._update_progress(100, "✅ 项目创建完成！")
+            else:
+                self._update_progress(
+                    100,
+                    "⚠ 未生成向量（嵌入模型不可用），已按关键词模式创建；"
+                    "请用项目虚拟环境重新向量化",
+                )
             self.after(2000, self._on_create_success, project_id)
 
         except Exception as e:
