@@ -40,7 +40,7 @@ def _make_vector_db(parent: str, npy_name: str = "embeddings.npy",
 
 
 class TestImportExistingVectorJSONCompat:
-    """覆盖 #修复-import_existing_vector-认不到-metadata.json 回归"""
+    """覆盖「导入向量库无法识别 metadata.json」回归"""
 
     def test_emb_npy_plus_metadata_json(self, isolated_root):
         """标准项目格式: embeddings.npy + metadata.json"""

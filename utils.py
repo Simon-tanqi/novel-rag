@@ -385,7 +385,7 @@ def load_embedding_model(spec: Optional[str]):
         from sentence_transformers import SentenceTransformer
         if kind == 'local':
             model = SentenceTransformer(target, local_files_only=True, device=device)
-            # 成功后才报成功：空壳/损坏目录下原先会「先报 ✓ 加载成功、再报 ⚠ 加载失败」，
+            # 成功后才报成功：空壳/损坏目录会「先报 ✓ 加载成功、后报 ⚠ 加载失败」，
             # 自相矛盾且误导排障。
             print(f"✓ 加载本地嵌入模型: {target}  [设备: {device}]")
         else:
@@ -535,9 +535,9 @@ def resolve_rerank_policy(cli_value=None, cfg=None, explicit_path: str = "") -> 
     1. cli_value 显式给定（True / False）：本次调用的用户意图最高优先；
     2. cfg["enable_rerank"] 为 True：配置里显式开启精排；
     3. cfg["rerank_auto_detect"]（缺省视为 True）为真，且 detect_local_reranker()
-       探测到本地重排模型目录 → 自动启用（本次改造的核心：有模型就默认用上）；
+       探测到本地重排模型目录 → 自动启用（有本地模型即默认用上）；
     4. 否则关闭精排 —— 打印明确告警并降级为纯向量检索，
-       **不报错、不下载、不新增强制依赖**，开箱体验与改造前一致。
+       **不报错、不下载、不新增强制依赖**，开箱体验不变。
 
     Args:
         cli_value: 命令行/GUI 的显式选择，True=强制开、False=强制关、None=未指定
@@ -640,8 +640,8 @@ def is_chapter_title(line: str) -> bool:
 
     注意：网文标题常以「！」「？」结尾，也可能用逗号分组
     （如「第147章 赵家，雷家！」），故显式放行 ！？，、；。
-    旧实现把这些标点一律当句末标点排除，会吞掉绝大多数标题行
-    （《绝世主宰》1029 章中 1013 章被判为正文），是结构坍塌的根因。
+    若把这些标点一律当句末标点排除，绝大多数标题行会被误判为正文
+    （《绝世主宰》1029 章中 1013 章会被判为正文），导致结构坍塌。
     """
     stripped = line.strip()
     if not stripped or len(stripped) > MAX_TITLE_CHARS:
@@ -742,7 +742,7 @@ def _find_chapter_boundaries(text: str):
     return boundaries
 
 
-# 公共别名：chunking.py（新切片引擎）按章解析结构时复用同一实现，
+# 公共别名：chunking.py 按章解析结构时复用同一实现，
 # 保证「章标题判定」全项目只有一个入口。
 find_chapter_boundaries = _find_chapter_boundaries
 
@@ -758,7 +758,7 @@ find_chapter_boundaries = _find_chapter_boundaries
 #    二级（；：，、）/ 三级（空白）/ 四级硬切兜底；
 # 3) 相邻片段重叠 = max(DEFAULT_OVERLAP_CHARS, 前块长度 × OVERLAP_RATIO)，上限
 #    OVERLAP_MAX_CHARS(100 字)，句边界对齐。
-# 2026-09 改造：规格以 token 为准（字符仅为窗口搜索的换算值，CHARS_PER_TOKEN）。
+# 规格以 token 为准（字符仅为窗口搜索的换算值，CHARS_PER_TOKEN）。
 #   - 目标：嵌入模型上限(512 token)的 70%-80% ⇒ 400 token ≈ 560 字（落 400-700 字）
 #   - 硬上限：480 token ≈ 672 字
 #   - 最小：150 token ≈ 210 字（低于则合并相邻段落）
@@ -804,7 +804,7 @@ def resolve_split_spec(chunk_size=None, overlap=None,
                        target_chars=None, overlap_ratio=None) -> dict:
     """分层切片完整规格：切片参数的唯一出口（建库 / 检索 / CLI / GUI 均经此）。
 
-    2026-09 起规格以 token 为准，字符值由 CHARS_PER_TOKEN(1.4) 换算：
+    规格以 token 为准，字符值由 CHARS_PER_TOKEN(1.4) 换算：
     目标 400 token ≈ 560 字（模型上限 512 的 ~78%）、硬上限 480 token ≈ 672 字、
     最小 150 token ≈ 210 字；重叠 10%-15%（50-100 字），句边界对齐。
 
@@ -981,10 +981,10 @@ def split_text_by_sentences(
     max_chars: int = MAX_CHUNK_CHARS,
     overlap_sentences: int = 1
 ) -> List[str]:
-    """（旧接口，兼容保留）标点切片 + 句子级重叠。
+    """标点切片 + 句子级重叠（兼容保留的旧接口）。
 
-    切片主逻辑已统一为规格切片 split_text_recursive（overlap 以字符计），
-    本接口仅额外按“句”追加重叠，供历史调用方使用。
+    切片主逻辑已统一为规格切片 split_text_recursive（overlap 以字符计）；
+    本接口仅额外按“句”追加重叠，供已有调用方使用。
     新代码请直接调用 split_text_recursive。
 
     Args:
@@ -1014,14 +1014,12 @@ def _chunk_by_sentences(
     overlap_sentences: int = 1,
     max_chunk_length: Optional[int] = None
 ) -> List[str]:
-    """（旧私有入口，兼容保留）转调 split_text_by_sentences。
+    """转调 split_text_by_sentences（兼容保留的旧入口）。
 
     max_chunk_length 已废弃：无标点超长段落由规格硬上限 max_chars 兜底。
 
-    在旧有「一级边界（。！：？）→ 四级硬切」之上补齐降级链：
-    仍超 max_chars 的单片依次尝试二级边界（；：，、）→ 三级边界（空白/换行）
+    降级链：一级边界（。！：？）→ 二级边界（；：，、）→ 三级边界（空白/换行）
     → 四级硬切，避免超长无句末标点的段落整段塞进向量库。
-    签名保持不变；切片口径仅在「单片超限」这一支路上被细化。
     """
     chunks = split_text_by_sentences(text, min_chars, max_chars, overlap_sentences)
     out: List[str] = []
@@ -1135,9 +1133,8 @@ def format_timestamp(dt: Optional[datetime] = None) -> str:
 
 # ===================== 分层切片：边界探测 + 父块构造 =====================
 # 目标：把「切片粒度 = 召回粒度」解耦为「子块检索 + 父块召回 + 邻居扩展」。
-# 本段全部为新增（新增常量 / 类 / 函数），不改动上方任何既有函数的签名与行为：
 # 子块仍由 split_text_recursive / split_text_by_chapters 产出，
-# 新增的只是「父块聚合」与「边界降级探测」这两层能力。
+# 本段只提供「父块聚合」与「边界降级探测」两层能力。
 
 TARGET_CHUNK_CHARS = 560   # 子块目标长度（字符，= TARGET_CHUNK_TOKENS 400）
 OVERLAP_MIN_CHARS = DEFAULT_OVERLAP_CHARS  # 子块重叠下限（字符）

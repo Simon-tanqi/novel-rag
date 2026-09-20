@@ -43,7 +43,7 @@ def _fallback_record(text: str, book_id: str = "", book_title: str = "") -> Dict
 
 
 def _load_previous_index(output_dir: str) -> Optional[Dict]:
-    """读取上一版索引（增量重切复用）：metadata.json + embeddings.npy + chapter_index.json。
+    """读取已有索引（增量重切复用）：metadata.json + embeddings.npy + chapter_index.json。
 
     返回 None 表示无历史索引（首次建库）。老库无 chapter_index.json 时，
     退化用 metadata 里的 chapter_id/chapter_hash 归纳章节指纹。
@@ -138,7 +138,7 @@ def build_vector_index(
         是否成功
     """
     # 入口校验：纯空白语料不含任何有效信息，直接判失败，避免产出 0 信息量的
-    # "假成功"索引（历史上会落盘 1 个仅含空白的块并返回 True）。
+    # "假成功"索引（仅含空白的语料不得落盘）。
     if not (text or "").strip():
         print("✗ 语料为空（仅含空白字符），未产出任何有效切片")
         if progress_callback:
@@ -151,8 +151,7 @@ def build_vector_index(
         os.makedirs(output_dir, exist_ok=True)
 
         # 规格切片参数：min/max/重叠/目标长度/重叠比例由 utils 唯一出口发放。
-        # 实际生效的 spec 会落盘 split_spec.json，供检索端与运维对账
-        # （历史上 TARGET_CHUNK_CHARS/OVERLAP_RATIO 曾因未接线而静默失效）。
+        # 实际生效的 spec 会落盘 split_spec.json，供检索端与运维对账。
         spec = resolve_split_spec(chunk_size, overlap, target_chars, overlap_ratio)
 
         # 文本切片（按章节边界切分，chunk 携带真实章节标题）
@@ -174,7 +173,7 @@ def build_vector_index(
         chunks = [r["text"] for r in records]
         chapter_of_chunk = [r["chapter_title"] for r in records]
 
-        # ---- 增量重切：章节 hash 未变的章复用上一版向量与 coref 前缀 ----
+        # ---- 增量重切：章节 hash 未变的章复用已有向量与 coref 前缀 ----
         # 以章为粒度（chapter_hash 指纹）：仅重切正文发生变化的章，
         # 未变章直接复用旧向量，避免整库重编码。spec 变化会改变块文本，
         # 指纹随之变化 → 自然全量重切。
@@ -261,7 +260,7 @@ def build_vector_index(
                 # 指代注入前缀（仅命中指代的 chunk 有值；检索阶段附加到查询文本）
                 "coref_prefix": rec["coref_prefix"],
                 "embed_text": rec["embed_text"],
-                # 分层召回字段（新增，不删旧字段）
+                # 分层召回字段（在既有字段基础上追加，不修改既有字段）
                 "parent_id": rec["parent_id"],
                 "prev_chunk_id": rec["prev_chunk_id"],
                 "next_chunk_id": rec["next_chunk_id"],
@@ -272,9 +271,9 @@ def build_vector_index(
         embedding_model, device = load_embedding_model(embedding_model_path)
         if embedding_model is None:
             if embedding_model_path:
-                # 规格（用户拍板）：显式指定了嵌入模型却加载不到 → 建库失败，
-                # 绝不产出「无向量的假就绪索引」（历史上此处仍返回 True，
-                # 导致项目状态被标成 ready、检索端拿到半成品）。
+                # 规格：显式指定了嵌入模型却加载不到 → 建库失败，
+                # 绝不产出「无向量的假就绪索引」——否则项目状态会被标成
+                # ready、检索端拿到半成品。
                 print(f"✗ 嵌入模型不可用: {embedding_model_path}（建库失败，"
                       f"未产出任何索引文件）")
                 print("  如需完全离线，请把 embedding_model_path 置空后重试"

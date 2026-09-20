@@ -481,7 +481,7 @@ class TestBuildIndexContract:
     """建库返回值的可信度：True 必须意味着「向量库真的可用」。"""
 
     def test_true_return_implies_embeddings_written(self, tmp_path, monkeypatch):
-        """【规格来源】历史缺陷（建库只写 metadata.json、状态假 ready）。
+        """【规格来源】建库契约：返回 True 必须意味着向量库真的可用。
 
         【判定标准】build_vector_index 返回 True 时，embeddings.npy 必须存在且
         行数 == metadata 条数。

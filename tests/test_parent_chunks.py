@@ -5,7 +5,7 @@
 1. BoundaryDetector 四级边界探测；
 2. build_parent_chunks：父块不跨章节、字符数达标、子块不被遗漏；
 3. RAGRetriever.expand_context：命中子块 → 父块 + 邻居，结果无重复；
-4. step2_split_embed 落盘：metadata 新增字段 + parent_chunks.json。
+4. step2_split_embed 落盘：metadata 分层字段 + parent_chunks.json。
 """
 import json
 
@@ -292,7 +292,7 @@ class TestPipelineLayering:
                 assert item["next_chunk_id"] == item["chunk_id"] + 1
 
     def test_chunk_ids_unchanged(self, tmp_path):
-        """chunk_id 生成规则与改造前一致：从 1 开始的连续整数"""
+        """chunk_id 生成规则：从 1 开始的连续整数"""
         import step2_split_embed as s2
 
         out_dir = tmp_path / "vector_db3"

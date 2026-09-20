@@ -2,7 +2,7 @@
 """
 tests/test_capability_boundaries.py — 能力边界测试（离线、快速、不依赖真实模型）
 
-覆盖 7 类真实能力边界（均为「项目实际会遇到、但此前无测试覆盖」的场景）：
+覆盖 7 类真实能力边界（项目实际会遇到的场景）：
 
 A. 空库 / 极小库        —— 空目录、仅有 metadata.json 无 embeddings.npy、单块库
 B. 缺本地模型           —— 无嵌入模型建库、缺 torch 依赖自检、无重排模型
@@ -180,14 +180,10 @@ def test_single_chunk_library_vector_hit(tmp_path):
 def test_build_with_unavailable_embedding_model_returns_false(tmp_path, monkeypatch):
     """显式指定嵌入模型但加载不到 → 建库必须失败（返回 False），不得产出假就绪索引。
 
-    【规格来源】2026-09-15 规格修订（用户拍板）：建库失败即返回失败。
-    本用例原为 test_build_without_embedding_model_writes_metadata_only，断言
-    「模型不可用时返回 True、只落 metadata.json」，属规格修订前的旧行为，
-    现按新规格重写（不放宽断言、不删除覆盖面）：
-    - 旧行为的问题：返回 True 会让上游把项目状态标成 ready，检索端拿到
-      无向量的半成品索引，用户看到「已建库」却检索不到内容。
-    - 新行为：返回 False，且不落盘 metadata.json / embeddings.npy，并回收
-      本次创建的空目录（不留幽灵目录）。
+    【规格来源】建库契约：建库失败即返回失败。
+    返回 True 会让上游把项目状态标成 ready，检索端拿到无向量的半成品索引，
+    用户看到「已建库」却检索不到内容；因此失败时必须返回 False，且不落盘
+    metadata.json / embeddings.npy，并回收本次创建的空目录（不留幽灵目录）。
     纯关键词检索模式（把 embedding_model_path 置空）仍属合法路径，
     由 tests/test_chunking_spec.py 与 tests/test_split_spec_wiring.py 覆盖。
     """

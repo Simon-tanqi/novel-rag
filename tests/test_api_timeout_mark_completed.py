@@ -2,16 +2,14 @@
 """
 验证 _call_api 完成后 _api_timeout_check 不会再触发"超时"提示
 
-Bug: 用户报告"AI 明明已经回答了，还报请求超时"——根因是
-_api_timeout_check 是独立线程，等满 90s 后没看 api_completed
-标志就触发 _show_error。
+规格：AI 已产出应答（api_completed=True）后，超时检查线程不得再报超时。
+因此 _api_timeout_check 循环内先看 api_completed，已完成立即返回；
+仅在 90s 到时且 !api_completed 时才提示"超时"。
 
-修复后:
+字段约定:
 - _call_api 成功 → api_completed=True, api_timeout=False
 - _call_api 异常 → api_completed=True, api_error=True
 - 早返回 → api_completed=True (success)
-- _api_timeout_check 循环里先看 api_completed，已完成立即 return
-- 90s 到时只在 !api_completed 时才报"超时"
 
 这里测核心场景：模拟 90s 后 api_completed=True 时的行为
 """
@@ -72,7 +70,7 @@ def test_api_completed_prevents_timeout_alert():
     main_mod.NovelRAGApp._api_timeout_check(app)
 
     # api_completed=True → 底部 if not api_completed: False，不报警
-    # 关键：_show_error 不该被调用（这是 bug 修复的核心）
+    # 关键：_show_error 不该被调用（失败打标后不得再弹错误提示）
     assert not app._show_error.called, "API 已完成时不应报超时"
     # api_timeout 不该被置 True
     assert app.api_timeout is False
@@ -92,5 +90,5 @@ def test_api_not_completed_triggers_timeout_alert():
     assert status_calls, "状态栏应被设为'超时'"
 
 
-    # 第三个集成测试在 mock 层级较多，环境依赖复杂；这里核心修复点
-    # （api_completed 标志 + _api_timeout_check 检查）已被前两个测试覆盖
+    # 集成用例的 mock 层级较多、环境依赖复杂；其核心判定点
+    # （api_completed 标志 + _api_timeout_check 检查）已由前两个测试覆盖

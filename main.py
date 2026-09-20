@@ -45,7 +45,7 @@ def assemble_context(hits, top_k=None):
     """组装喂给 LLM 的检索上下文（分层召回的最后一步）。
 
     优先级：命中子块 > 父块 > 邻居；按章节分组，组内按优先级排序。
-    - 无分层扩展字段（老向量库 / 未扩展）时，输出与改造前逐字节一致：
+    - 无分层扩展字段（老向量库 / 未扩展）时，保持原始逐段输出：
       每命中一个块输出一段 ``[来源:章节]\\n正文``，段间以 ``\\n\\n---\\n\\n`` 连接。
     - 存在父块/邻居时，按章节聚合为块，章节内先命中、再父块、再邻居。
     - 同章节内按「文本包含关系」去重：父块由子块原文拼接而成，若父块已输出，
@@ -69,7 +69,7 @@ def assemble_context(hits, top_k=None):
             return "neighbor"
         return "hit"
 
-    # 无分层扩展 → 保持改造前的原始输出（零行为漂移）
+    # 无分层扩展 → 原始逐段输出（不做章节聚合）
     if not any(_kind(h) != "hit" for h in hits):
         return "\n\n---\n\n".join(
             f"[来源:{h.get('chapter', '')}]\n{h.get('text', '')}" for h in hits
@@ -1045,8 +1045,8 @@ class NovelRAGApp(ctk.CTk):
         """调用AI API（后台线程）"""
         self.api_start_time = time.time()
         self.api_timeout = False
-        self.api_completed = False  # 新增：API 调用完成（成功或失败）后置 True
-        self.api_error = False       # 新增：用于区分 "超时" 和 "错误"
+        self.api_completed = False  # API 调用完成（成功或失败）后置 True
+        self.api_error = False       # 用于区分 "超时" 和 "错误"
 
         # 超时检测线程
         timeout_thread = threading.Thread(target=self._api_timeout_check)
@@ -1148,7 +1148,7 @@ class NovelRAGApp(ctk.CTk):
                         metadata_file=metadata_file
                     )
                     # 检索前查询改写：仅当问题命中元词（主角/男主/女主…）时才多调一次
-                    # LLM；失败自动回退原查询（extra_queries 为空 → 行为与改造前一致）
+                    # LLM；失败自动回退原查询（extra_queries 为空 → 等同不做改写）
                     extra_queries, query_rewrite_note = self._maybe_rewrite_query(
                         message, api_url, api_key, model_name
                     )

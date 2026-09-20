@@ -88,10 +88,10 @@ class TestRealModelAvailability:
         assert np.allclose(norms, 1.0, atol=1e-4), f"向量未归一化: {norms}"
 
     def test_hollow_model_dir_must_not_claim_success(self, capsys, hollow_model_dir):
-        """【规格来源】历史缺陷：空壳模型目录被误判为「本地模型可用」。
+        """【规格来源】模型可用性判定：空壳模型目录不得被误判为「本地模型可用」。
 
         【判定标准】不存在可用权重的模型目录，日志中**不得**出现「✓ 加载本地嵌入模型」
-        这类成功语（现状先报成功后报失败，属自相矛盾日志，会误导排障）。
+        这类成功语（先报成功后报失败属自相矛盾日志，会误导排障）。
         空壳目录在 tmp_path 下构造：既不依赖仓库内残留，也不在仓库内留残留。
         """
         model, device = utils.load_embedding_model(str(hollow_model_dir))

@@ -1,7 +1,7 @@
 """
-chunking.py — 结构预处理 + 场景分层 + token 切片引擎（新切片逻辑的唯一实现）
+chunking.py — 结构预处理 + 场景分层 + token 切片引擎（切片逻辑的唯一实现）
 
-对应需求（2026-09 切片逻辑改造）：
+对应需求：
 1. 结构预处理：统一换行、识别「第X章/卷/序章/番外」标题、剔除章首章尾空行、
    连续空行归一为场景边界；
 2. 章 = 一级元数据（而非唯一 chunk）：章内按空行/场景切，场景内按段落与句子聚合；
@@ -243,8 +243,8 @@ def _pick_candidate(cands: List[int], aim: int, text: str, start: int,
 def find_best_cut(text: str, start: int, spec: Dict) -> int:
     """在 [start+min_chars, start+max_chars] 窗口内按优先级搜索最佳切点。
 
-    与旧实现的关键差异：**以目标长度为中心前后搜索**（旧实现从 min_chars 起
-    取第一个标点，导致块长全部偏短），且每个候选点需通过引号/括号闭合检查。
+    以目标长度为中心前后搜索最佳切点（避免块长偏短），
+    每个候选点需通过引号/括号闭合检查。
     """
     n = len(text)
     min_chars = spec["min_chars"]

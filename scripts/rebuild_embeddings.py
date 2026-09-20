@@ -2,7 +2,7 @@
 rebuild_embeddings.py — 重新生成 embeddings.npy（按向量库落盘规格重切 + 重嵌入）
 
 适用场景：metadata.json 存在但 embeddings.npy 缺失（典型：ingest 时嵌入模型
-加载失败，自动降级到关键词模式，status 被错误地设成 ready）
+加载失败，自动降级到关键词模式，索引不含向量）
 
 切片口径：优先复用向量库内 split_spec.json（建库时实际生效的规格），
 使其与 ingest 完全一致；老库无该文件时回落项目配置 + 规格默认值。

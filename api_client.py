@@ -3,10 +3,9 @@ api_client.py — API客户端
 封装与大语言模型API的通信
 支持 DeepSeek 及兼容 OpenAI API 格式的服务
 
-设计要点（2026-09 重构）：
-1. 失败即抛异常（APIClientError），不再把错误文本伪装成正常回复返回——
-   调用方通过 try/except 区分「成功回复」与「调用失败」，避免 UI/CLI
-   把错误信息当成 AI 回答展示。
+设计要点：
+1. 失败即抛异常（APIClientError）：调用方通过 try/except 区分「成功回复」与
+   「调用失败」，错误文本不会被当成 AI 回答展示。
 2. 指数退避重试：对网络异常 / 429 / 5xx 自动重试（默认 3 次，
    1s → 2s → 4s），对 4xx 参数错误不重试（重试无意义）。
 """
@@ -76,7 +75,7 @@ class APIClient:
                        max_tokens: Optional[int] = None) -> dict:
         """构造请求体
 
-        temperature / max_tokens 为新增的可选参数（默认值与历史行为一致）：
+        temperature / max_tokens 为可选参数（默认值保持既有行为）：
         供「查询改写」等需要确定性、短输出的轻量调用使用（temperature=0）。
         """
         data = {

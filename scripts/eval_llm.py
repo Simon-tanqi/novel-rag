@@ -1,5 +1,5 @@
 """
-eval_llm.py — 真实 LLM 问答评测（需 API KEY，本轮验收暂缓执行）
+eval_llm.py — 真实 LLM 问答评测（需 API KEY）
 
 目标：把「60% 及格线」落到可复现命令上。
   - 逐题走与 `novel_rag.py ask` 完全相同的链路（同一检索器 + 同一 prompt 模板 + 同一 API 客户端）；

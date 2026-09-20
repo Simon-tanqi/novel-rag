@@ -85,7 +85,7 @@ class TestPunctBoundaryCut:
             assert chunks[0].endswith(punct)
 
     def test_secondary_punct_triggers_fallback_cut(self):
-        """逗号/分号/顿号属二级边界：一级标点缺失时降级切分（原实现整段硬切）"""
+        """逗号/分号/顿号属二级边界：一级标点缺失时降级切分"""
         text = "啊" * 205 + "，" + "呀" * 5 + "；" + "嘿" * 5 + "、" + "哈" * 100
         chunks = split_text_recursive(text, 200, 512, 50)
         assert len(chunks) >= 2, "二级边界未触发降级切分"
@@ -130,7 +130,7 @@ class TestOverlap:
             assert cur.startswith(prev[-DEFAULT_OVERLAP_CHARS:]), "相邻片段未保持 50 字符重叠"
 
     def test_zero_overlap_is_contiguous(self):
-        """overlap=0 时片段应无缝拼接（旧实现在 overlap=0 时仍重叠 1 句，已修复）"""
+        """overlap=0 时片段应无缝拼接"""
         text = self._corpus()
         chunks = split_text_recursive(text, 200, 512, 0)
         assert "".join(chunks) == text

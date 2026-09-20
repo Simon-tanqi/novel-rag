@@ -6,13 +6,11 @@ rag_retriever.py — RAG检索核心
 1. 向量检索: 使用嵌入模型编码查询，与已存向量计算余弦相似度（默认，需本地嵌入模型）
 2. 关键词检索: 基于关键词匹配（未配置嵌入模型 / 模型加载失败时的降级路径）
 
-说明（2026-09 重构）:
-- 移除了旧版多条未使用的文件加载路径（_load_single_file / _load_npy_file /
-  _load_json_file / _load_text_file / _split_into_chunks），统一走
-  「标准项目级向量库」格式（embeddings.npy + metadata.json）；
-- 目录导入场景仍保留：兼容“目录中散落多个 npy/json/txt”的旧数据目录；
-- 修正不一致：旧逻辑“有向量但无嵌入模型”时也走关键词——语义与
-  “有向量”自相矛盾，现统一按  embedding_model 是否可用 决定检索通道。
+向量库格式：统一走「标准项目级向量库」（embeddings.npy + metadata.json）；
+目录导入场景另兼容“目录中散落多个 npy/json/txt”的数据目录。
+
+检索通道由 embedding_model 是否可用决定：仅有向量而嵌入模型不可用时无法做
+向量检索，一律走关键词通道。
 """
 import os
 import re
@@ -241,7 +239,7 @@ class RAGRetriever:
         txt_files = [f for f in entries if f.endswith(('.txt', '.md'))]
         json_files = [f for f in entries if f.endswith('.json')]
 
-        # 优先加载“成对”的 npy + 同名 json（旧版导出格式，如 xxx.npy + xxx.json）
+        # 优先加载“成对”的 npy + 同名 json（导出格式 xxx.npy + xxx.json）
         loaded_pair = False
         for npy_file in npy_files:
             base = os.path.splitext(npy_file)[0]
@@ -404,8 +402,7 @@ class RAGRetriever:
 
         优先级：向量库落盘的 split_spec.json（建库时实际生效的规格）>
         chunk_size 入参 > utils 规格默认值（min 210 / target 560 / max 672 /
-        重叠 50-100 字，前块 12.5%）。老向量库无 split_spec.json 时自动回落默认，
-        行为与改造前一致。
+        重叠 50-100 字，前块 12.5%）。老向量库无 split_spec.json 时自动回落默认值。
         """
         disk_spec: Dict = {}
         try:
@@ -460,17 +457,17 @@ class RAGRetriever:
 
         分层召回的最后一步（在章节聚合之后调用）：
         1) 命中子块本身，保持原有顺序占据列表前段
-           （`hits[:k]` 仍是纯命中序列 → Recall@k 评价口径与改造前一致）；
+           （`hits[:k]` 仍是纯命中序列 → Recall@k 评价口径不受扩展影响）；
         2) 追加其父块（parent_id → parent_chunks.json，含更完整叙事上下文）；
         3) 追加同章节内前/后各 neighbor_count 个邻居（按 prev/next 链走）。
         父块与邻居统一追加在全部命中之后，不挤占前段命中位次。
 
         去重规则：子块按 chunk_id 去重、父块按 parent_id 去重，命中项本身
         不会被重复追加为邻居。返回结构与 retrieve() 完全一致（List[Dict]），
-        仅新增 is_parent / is_neighbor / hit 三个标记字段便于上层按优先级组装。
+        另外携带 is_parent / is_neighbor / hit 三个标记字段，便于上层按优先级组装。
 
         老向量库（metadata 无 parent_id、目录无 parent_chunks.json）时
-        退化为恒等返回，行为与改造前一致。
+        退化为恒等返回（不追加父块与邻居）。
 
         Args:
             results: chapter_aggregate_rerank 之后的命中列表
@@ -573,7 +570,7 @@ class RAGRetriever:
 
         Returns:
             相关文档列表，每项包含 {text, score, chapter, chunk_id, file}，
-            并在末尾追加父块/邻居（新增 is_parent / is_neighbor / hit 标记字段）
+            并在末尾追加父块/邻居（携带 is_parent / is_neighbor / hit 标记字段）
         """
         return self.retrieve_multi(
             question, extra_queries=None, top_k=top_k,
@@ -606,11 +603,10 @@ class RAGRetriever:
 
         Returns:
             相关文档列表，每项包含 {text, score, chapter, chunk_id, file}，
-            并在末尾追加父块/邻居（新增 is_parent / is_neighbor / hit 标记字段）
+            并在末尾追加父块/邻居（携带 is_parent / is_neighbor / hit 标记字段）
         """
-        # 入口校验：非法查询 / 非正 top_k 必须是「显式的空结果」，
-        # 而不是崩栈（question=None 曾抛 AttributeError）或靠负索引取尾元素
-        # （top_k=-1 曾返回非空结果）。
+        # 入口校验：非法查询 / 非正 top_k 一律返回「显式的空结果」，
+        # 不抛异常、不靠负索引取尾元素。
         if not isinstance(question, str) or not question.strip():
             print("⚠ 查询问题为空或非字符串，返回空结果")
             return []

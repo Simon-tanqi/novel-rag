@@ -255,7 +255,7 @@ def cmd_ingest(args) -> None:
     # 3) 切片 + 向量化
     print("③ 切片与向量化 ...")
     # 切片规格唯一出口（utils.resolve_split_spec）：打印实际生效值，避免
-    # 历史上「文档承诺 400/15% 而实际跑 512/50」的对账失配再次发生。
+    # 防止「文档承诺 400/15% 而实际跑 512/50」的对账失配。
     spec = resolve_split_spec(
         args.chunk_size, args.overlap,
         getattr(args, "target_chars", None), getattr(args, "overlap_ratio", None),

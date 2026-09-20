@@ -141,8 +141,8 @@ def normalize_structure(text: str) -> str:
     """结构预处理：统一换行 → 压缩行内空白与缩进 → 连续空行归一为 1 个空行。
 
     空行是**场景边界**（章内按空行分场景，见 chunking.parse_structure），
-    必须保留且唯一化。旧版末步归一化用 `re.sub(r'\\n\\s*\\n', '\\n', text)`
-    把空行整体抹平，下游丢失段落/场景边界，切块只能退化为纯标点找点。
+    必须保留且唯一化：末步归一化只做「连续空行 → 1 个空行」，
+    不得把空行整体抹平，否则下游丢失段落/场景边界，切块只能退化为纯标点找点。
     """
     if not text:
         return ""
@@ -314,8 +314,8 @@ def _merge_paragraphs(text: str) -> str:
 def _looks_like_chapter_title(line: str) -> bool:
     """章节标题判定（转调 utils.is_chapter_title，全项目单一实现）。
 
-    旧实现在此处重复了「行首第X章 + 短行 + 不含句读」的规则，
-    且与 utils/novel_context 版本漂移，导致清洗阶段误吞带！？的标题。
+    标题需同时满足「行首第X章 + 短行 + 不含句读」；判定逻辑集中在此，
+    避免清洗阶段误吞带！？的标题。
     """
     return is_chapter_title(line)
 

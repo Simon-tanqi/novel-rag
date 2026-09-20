@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""测试 2026-09 新增能力：ensure_demo_project 自动注册、cmd_demo 分支、cmd_ingest 同路径跳过。
+"""测试 ensure_demo_project 自动注册、cmd_demo 分支、cmd_ingest 同路径跳过。
 
 测试策略：
   - monkeypatch utils.get_root_dir → tmp_path，实现 ProjectManager 与数据目录的完全隔离
@@ -293,5 +293,5 @@ class TestCmdIngestSamePathSkip:
         project = pm.get_project_by_name("demo")
         assert project is not None
         # args.embedding="" 表示无嵌入模型，且此处 patch 掉的建库未产出 embeddings.npy，
-        # 因此状态应为 keyword_only（修复前会无条件写成 ready，造成"向量检索不可用"的假象）
+        # 因此状态应为 keyword_only（无条件写成 ready 会造成「向量检索可用」的假象）
         assert project["status"] == "keyword_only"

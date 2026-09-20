@@ -408,9 +408,8 @@ class TestDeclaredPromiseConsistency:
         )
 
     def test_epub_dependencies_declared_as_extras(self):
-        """【规格来源】2026-09-15 规格修订（用户拍板）：epub 依赖（ebooklib /
-        beautifulsoup4）改为 extras 轻量安装，不再作为 requirements.txt 的强制依赖；
-        README 安装说明须给出 extras 安装入口。
+        """【规格来源】epub 依赖（ebooklib / beautifulsoup4）为 extras 轻量安装，
+        不作为 requirements.txt 的强制依赖；README 安装说明须给出 extras 安装入口。
 
         【判定标准】①requirements-extras.txt 中两包为生效行；
         ②requirements.txt 中两包不得为生效行（仅允许注释形式提示）；
@@ -438,7 +437,7 @@ class TestDeclaredPromiseConsistency:
             )
             assert pkg not in base_active, (
                 f"{pkg} 仍被列为 requirements.txt 强制依赖"
-                f"（规格修订：epub 依赖应为 extras 轻量安装）"
+                f"（epub 依赖应为 extras 轻量安装）"
             )
 
         readme = (ROOT / "README.md").read_text(encoding="utf-8", errors="ignore")
@@ -574,7 +573,7 @@ class TestEvalEvidence:
         assert recall >= 90.0, f"demo Recall@3 仅 {recall}%"
 
     def test_demo_mrr_matches_readme_claim(self):
-        """【规格来源】README 第 304 行：「MRR = 0.938」。
+        """【规格来源】README 声明的 demo MRR 指标（须与实跑一致）。
 
         【判定标准】README 引用的 MRR 必须与实跑值一致（文档数值可信度）。
         """

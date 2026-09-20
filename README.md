@@ -315,7 +315,16 @@ API 客户端重试与响应解析、demo 自动注册与 cmd_demo 分支、cmd_
 epub 格式加载与 HTML 标签剥离、epub 可选依赖（extras）声明与 README 安装入口一致性。
 
 343 项测试（含混合召回 RRF、CrossEncoder 精排、降级路径等），核心用例秒级完成；
-依赖装齐时 343 项全过，未安装可选依赖（如 `torch`）时对应用例自动 skip。
+依赖装齐时实测 **322 项通过 / 5 项失败 / 16 项跳过**（全量环境 `python -m pytest tests/ -v`）；
+未安装可选依赖（如 `torch`）时对应用例自动 skip。
+
+5 项失败均为**测试规格层**问题，与检索链路可用性无关：
+- 3 项 `tests/test_commercial_negative_recovery.py`：断言要求**可机读的降级状态字段**，
+  当前实现只提供文本日志，该机读状态规格尚未实现；
+- 1 项 `tests/test_commercial_spec_conformance.py::test_demo_eval_has_discrimination_power`：
+  内置 demo 语料本身仅 5 块，Recall@3 随机基线过高，用例要求 >= 30 块才具区分度；
+- 1 项 `tests/test_commercial_capacity_concurrency.py::test_real_corpus_build_throughput_200k`：
+  20 万字吞吐压测依赖本地私有语料（`data/绝世主宰`），仓库不含该语料，clone 后无法复现。
 
 ## 效果评估思路
 
@@ -324,6 +333,7 @@ epub 格式加载与 HTML 标签剥离、epub 可选依赖（extras）声明与 
   # 对 demo 项目跑 12 道「问题-预期章节」QA，量化召回（Recall@k + MRR）：
   python eval_retrieval.py --name demo --top-k 3
   # 输出示例：QA 总数: 12 / Recall@3 = 12/12 = 100.0% / MRR = 0.917
+  # （仓库自带嵌入模型时 MRR 0.917；嵌入模型不可用、降级纯关键词模式时 0.861）
   ```
 - 指标口径：Recall@k = 命中「预期章节」的题数 / 总题数；MRR = 各题首个命中排名的倒数均值，
   越高说明命中越靠前（同一套 QA 集上可对比不同切片规格的调参效果）；

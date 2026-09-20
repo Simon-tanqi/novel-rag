@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""切片规格接线回归测试（防止"定义但零调用"再次发生）
+"""切片规格接线回归测试（防止「定义但零调用」）
 
 覆盖三条规格：
 1) min_chars=210 为最优先硬约束：不足 210 字符不切分，即使命中一级标点；
@@ -7,8 +7,8 @@
    且 build_vector_index 把「实际生效规格」落盘 split_spec.json 供对账；
 3) 检索端 assemble_context 按文本包含关系去重：父块覆盖子块时不重复输出。
 
-历史上 TARGET_CHUNK_CHARS / OVERLAP_RATIO 曾在 utils 中定义但零调用
-（实际跑 512 + 固定 50），本文件的作用是把该规格钉在测试上。
+规格约束：TARGET_CHUNK_CHARS / OVERLAP_RATIO 必须真正接线到切片逻辑，
+不得出现「定义但零调用」（实际跑 512 + 固定 50）。
 """
 import json
 
